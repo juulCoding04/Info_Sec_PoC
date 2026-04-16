@@ -8,17 +8,15 @@ A proof-of-concept CLI application demonstrating the security mechanisms of a di
 An attacker script demonstrates how specific attacks are prevented.
 
 ## Project structure
-|-- crypto/     # Shared cryptographic utilities (key, signing, SD-JWT)
-
-|-- issuer/     # Issuer script (issues signed credentials)
-
-|-- wallet/     # Interactive wallet CLI (the user-facing application)
-
-|-- verifier/   # Cerifier script (requests and validates presentations)
-
-|-- attacker/   # Attack demonstration scripts
-
-|-- docs/       # Architecture and design documentation
+```bash
+|-- Info_Sec_PoC
+|   |-- crypto/         # Shared cryptographic utilities (key, signing, SD-JWT)
+|   |-- issuer/         # Issuer script (issues signed credentials)
+|   |-- wallet/         # Interactive wallet CLI (the user-facing application)
+|   |-- verifier/       # Cerifier script (requests and validates presentations)
+|   |-- attacker/       # Attack demonstration scripts
+|   |--docs/            # Architecture and design documentation
+```
 
 ## Getting started
 
