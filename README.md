@@ -15,7 +15,7 @@ An attacker script demonstrates how specific attacks are prevented.
 |   |-- wallet/         # Interactive wallet CLI (the user-facing application)
 |   |-- verifier/       # Cerifier script (requests and validates presentations)
 |   |-- attacker/       # Attack demonstration scripts
-|   |--docs/            # Architecture and design documentation
+|   |-- docs/            # Architecture and design documentation
 ```
 
 ## Getting started
