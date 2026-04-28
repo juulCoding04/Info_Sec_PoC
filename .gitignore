@@ -22,3 +22,9 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Generated key pairs
+issuer/issuer_keys/
+wallet/device_keys/
+verifier/verifier_keys/
+attacker/attacker_keys/
