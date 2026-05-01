@@ -8,7 +8,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from crypto.keys import generate_key_pair,generate_keypair, load_private_key_by_id, save_keypair, key_exists, get_public_key_pem, load_private_key
 from crypto.sd_jwt import create_sd_jwt
 
-trusted_issuers = {"ugent", "belgian_government", "european_commission", "uantwerp", "vub", "kuleuven"}
 
 BASE_DIR = os.path.join(os.path.dirname(__file__), "..")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -167,7 +166,13 @@ def cmd_list_types(party: str, entry: dict):
     print(f"'{party}' can issue the following credential types:")
     for ctype in entry["allowed_credentials"]:
         print(f"  - {ctype}")
-
+def cmd_check_revocation(args):
+    with open(REVOCATION_FILE) as f:
+        data = json.load(f)
+    if args.jti in data["revoked_ids"]:
+        print(f"[REVOKED] Credential '{args.jti}' is revoked.")
+    else:
+        print(f"[VALID]   Credential '{args.jti}' is not revoked.")
 def cmd_issue(party: str, entry: dict, args):
     credential_types =args.type
     holder_key_id = args.holder
@@ -328,6 +333,9 @@ Examples:
     p_revoke = sub.add_parser("revoke", help="Revoke an issued credential by its jti")
     p_revoke.add_argument("--jti", required=True, help="The jti (credential ID) to revoke")
 
+    p_check = sub.add_parser("check-revocation", help="Check if a credential is revoked")
+    p_check.add_argument("--jti", required=True, help="The jti to check")
+
     return parser
 
 
@@ -354,7 +362,8 @@ def main():
 
     elif args.command == "revoke":
         cmd_revoke(did, entry, args)
-
+    elif args.command == "check-revocation":
+        cmd_check_revocation(args)
 
 if __name__ == "__main__":
     main()
