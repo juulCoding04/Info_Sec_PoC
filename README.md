@@ -56,7 +56,7 @@ python scripts/generate_keys.py
 
 ### setup
 ```bash
-python ./scripst/generate_holder_keys.py
+python ./scripts/generate_holder_keys.py
 ```
 Generates key pairs (might be not necessary as almost the same as generate_keys)
 
