@@ -50,3 +50,33 @@ Run script to initialize all keys
 ```bash
 python scripts/generate_keys.py
 ```
+
+
+## Issuer commands
+
+### setup
+Run these commands once for each issuer defined in trusted_issuers.json:
+```bash
+python -m issuer.issuer -p <issuer> init
+```
+with <issuer> the name of the issuer as defined in the party_mapping dict in issuer.py
+This will create keys for the issuers. 
+
+### List credential types of issuer
+
+```bash
+python -m issuer.issuer -p <issuer> list-types
+```
+Will provide all the credentials (ID, Driver Licence, Diploma's, ...) the issuer has acces to.
+
+### Issue credentials
+
+```bash
+python -m issuer.issuer -p <issuer> issue --holder holder_device --type <credential> -y
+```
+This will issue a credential the issuer has acces to for the holder_device and creates a <credential>_credential.json file in the data subfolder.
+
+### Revoke credentials
+Still in progress (functionallity not correct right now).
+
+
