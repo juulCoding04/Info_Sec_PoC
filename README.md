@@ -55,6 +55,11 @@ python scripts/generate_keys.py
 ## Issuer commands
 
 ### setup
+```bash
+python ./scripst/generate_holder_keys.py
+```
+Generates key pairs (might be not necessary as almost the same as generate_keys)
+
 Run these commands once for each issuer defined in trusted_issuers.json:
 ```bash
 python -m issuer.issuer -p <issuer> init
