@@ -55,3 +55,20 @@ def load_private_key(path):
 def load_public_key(path):
     with open(path, "rb") as f:
         return serialization.load_pem_public_key(f.read())
+def key_exists(key_id: str) -> bool:
+    dir = os.path.join(os.path.dirname(__file__), '..', 'issuer', 'issuer_keys', key_id)
+    return os.path.exists(os.path.join(dir, 'private_key.pem'))
+
+def get_public_key_pem(key_id: str) -> str:
+    path = os.path.join(os.path.dirname(__file__), '..', 'issuer', 'issuer_keys', key_id, 'public_key.pem')
+    with open(path, 'r') as f:
+        return f.read()
+
+def generate_key_pair(key_id: str):
+    dir = os.path.join(os.path.dirname(__file__), '..', 'issuer', 'issuer_keys', key_id)
+    priv, pub = generate_keypair()
+    save_keypair(priv, pub, dir)
+
+def load_private_key_by_id(key_id: str):
+    path = os.path.join(os.path.dirname(__file__), '..', 'issuer', 'issuer_keys', key_id, 'private_key.pem')
+    return load_private_key(path)
