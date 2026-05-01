@@ -82,6 +82,9 @@ python -m issuer.issuer -p <issuer> issue --holder holder_device --type <credent
 This will issue a credential the issuer has acces to for the holder_device and creates a <credential>_credential.json file in the data subfolder.
 
 ### Revoke credentials
-Still in progress (functionallity not correct right now).
+```bash
+python -m issuer.issuer -p <issuer> revoke --jti <Credential ID (jti)>
+```
+the Credential ID (jti) is printed when issueing a credential.
 
 
