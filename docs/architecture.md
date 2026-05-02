@@ -8,6 +8,7 @@ Communication between components will happen via JSON files in the `data/` direc
 ---
 
 ## Project structure
+```bash
 identity-wallet/
 │
 ├── crypto/                  
@@ -68,6 +69,7 @@ identity-wallet/
 ├── .gitignore
 ├── README.md
 └── requirements.txt
+```
 
 ---
 
