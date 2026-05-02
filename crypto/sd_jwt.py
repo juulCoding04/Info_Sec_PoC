@@ -6,6 +6,7 @@ import time
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from cryptography.hazmat.primitives import serialization
 import base64
 
 def _b64url(data: bytes) -> str:
@@ -68,7 +69,10 @@ def create_sd_jwt(
         "_sd": sd_hashes,
         "_sd_alg": "sha-256",
         "cnf": {
-            "jwk": holder_public_key_pem  # device binding
+            "jwk": holder_public_key_pem.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode("utf-8")
         }
     }
 

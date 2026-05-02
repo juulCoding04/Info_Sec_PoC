@@ -5,7 +5,7 @@ import sys
 import time
 import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from crypto.keys import generate_key_pair,generate_keypair, load_private_key_by_id, save_keypair, key_exists, get_public_key_pem, load_private_key
+from crypto.keys import generate_keypair, save_keypair, load_private_key, load_public_key
 from crypto.sd_jwt import create_sd_jwt
 
 
@@ -116,12 +116,13 @@ def _info(msg: str):
 def _warn(msg: str):
     print(f"[WARN]  {msg}")
 
-def load_public_key(holder_key_id: str) -> str:
-    path = os.path.join(BASE_DIR, "keys", holder_key_id, "public_key.pem")
-    if not os.path.exists(path):
-        die(f"Error: Public key for holder '{holder_key_id}' not found.")
-    with open(path) as f:
-        return f.read()
+#def load_public_key(holder_key_id: str) -> str:
+#    path = os.path.join(BASE_DIR, "keys", holder_key_id, "public_key.pem")
+#    print(f"holder_key_id: {holder_key_id}")
+#    if not os.path.exists(path):
+#        die(f"Error: Public key for holder '{holder_key_id}' not found.")
+#    with open(path) as f:
+#        return f.read()
     
 def save_credential(credential: dict, credential_type : str):
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -140,26 +141,38 @@ def add_to_revocation_list(jti: str):
 
 def cmd_init(party: str, entry: dict):
     key_id = entry["key_id"]
-    if key_exists(key_id):
-        _warn(f"Key pair for '{party}' already exists. Skipping generation.")
+    dir = os.path.join(BASE_DIR,"issuer", 'issuer_keys', key_id)
+    private_key_path = os.path.join(dir, 'private_key.pem')
+    if os.path.exists(private_key_path):
+        _warn(f"Keys already exist for '{party}'. Run with --force to overwrite.")
+        _warn(f"No new keys generated. Exiting.")
         return
-    else:
-        generate_key_pair(key_id)
-        ok(f"Key pair generated and saved for '{party}'.")
-        _info(f"  Private key: data/keys/{key_id}_private.pem  (keep secret!)")
-        _info(f"  Public key:  data/keys/{key_id}_public.pem   (share with verifiers)")
+    private_key, public_key = generate_keypair()
+    save_keypair(private_key, public_key, dir)
+    ok(f"Key pair generated and saved for '{party}'.")
+    _info(f"Public key stored at issuer/issuer_keys/{key_id}/public_key.pem (share with verifiers)")
+    _info(f"Private key stored at issuer/issuer_keys/{key_id}/private_key.pem (keep secret)")
+
 
 def cmd_init_force(party: str, entry: dict):
+    _warn(f"Overwriting keys for '{party}'.")
     key_id  = entry["key_id"]
-    generate_key_pair(key_id)
+    dir = os.path.join(BASE_DIR,"issuer", 'issuer_keys', key_id)
+    private_key, public_key = generate_keypair()
+    save_keypair(private_key, public_key, dir)
     ok(f"Key pair generated and saved for '{party}'.")
+    _info(f"Public key stored at issuer/issuer_keys/{key_id}/public_key.pem (share with verifiers)")
+    _info(f"Private key stored at issuer/issuer_keys/{key_id}/private_key.pem (keep secret)")
 
 def cmd_show_key(party: str, entry: dict):
     """Print this issuer's public key PEM."""
     key_id = entry["key_id"]
-    if not key_exists(key_id):
-        die(f"No keys found for '{key_id}'. Run 'init' first.")
-    print(get_public_key_pem(key_id))
+    path = os.path.join(BASE_DIR,"issuer", 'issuer_keys', key_id, 'public_key.pem')
+    if not os.path.exists(path):
+        die(f"Error: No public key found for '{party}'. Run 'init' first.")
+    with open(path, "r") as f:
+        print(f.read())
+    
 
 def cmd_list_types(party: str, entry: dict):
     """List the credential types this issuer can issue."""
@@ -182,11 +195,15 @@ def cmd_issue(party: str, entry: dict, args):
         die(f"Error: '{party}' cannot issue credential type '{credential_types}'.")
     
     key_id = entry["key_id"]
-    if not key_exists(key_id):
+    dir = os.path.join(BASE_DIR, "issuer", 'issuer_keys', key_id)
+    path = os.path.join(dir, 'private_key.pem')
+    if not os.path.exists(path):
         die(f"No keys found for '{key_id}'. Run 'init' first.")
-    private_key = load_private_key_by_id(key_id)
+    private_key = load_private_key(path)
+    public_key_path = os.path.join(dir, 'public_key.pem')
+    holder_public_pem = load_public_key(os.path.join(BASE_DIR, "wallet", "device_keys", "public_key.pem"))
 
-    holder_public_pem = load_public_key(holder_key_id)
+
 
     if(args.claims):
         try:
