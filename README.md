@@ -45,3 +45,8 @@ Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+
+Run script to initialize all keys
+```bash
+python scripts/generate_keys.py
+```

@@ -1,0 +1,14 @@
+{
+    "trusted_issuers": [
+        {
+            "name": "UGent",
+            "public_key_path": "issuer/issuer_keys/ugent/public_key.pem",
+            "allowed_credentials": ["student_id", "library_card"]
+        },
+        {
+            "name": "Belgian_Government",
+            "public_key_path": "issuer/issuer_keys/belgian_government/public_key.pem",
+            "allowed_credentials": ["national_id", "driving_license"]
+        }
+    ]
+}
