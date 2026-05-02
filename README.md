@@ -55,17 +55,12 @@ python scripts/generate_keys.py
 ## Issuer commands
 
 ### setup
-```bash
-python ./scripts/generate_holder_keys.py
-```
-Generates key pairs (might be not necessary as almost the same as generate_keys)
-
-Run these commands once for each issuer defined in trusted_issuers.json:
+Run these commands once for each the issuers defined in trusted_issuers.json to check the keys have been generated:
 ```bash
 python -m issuer.issuer -p <issuer> init
 ```
 with <issuer> the name of the issuer as defined in the party_mapping dict in issuer.py
-This will create keys for the issuers. 
+This will create keys for the issuers if generate_keys.py failed. Add --force to overwrite the existing keys. 
 
 ### List credential types of issuer
 
@@ -77,7 +72,7 @@ Will provide all the credentials (ID, Driver Licence, Diploma's, ...) the issuer
 ### Issue credentials
 
 ```bash
-python -m issuer.issuer -p <issuer> issue --holder holder_device --type <credential> -y
+python -m issuer.issuer -p <issuer> issue --holder wallet --type <credential> -y
 ```
 This will issue a credential the issuer has acces to for the holder_device and creates a <credential>_credential.json file in the data subfolder.
 
