@@ -74,7 +74,7 @@ Will provide all the credentials (ID, Driver Licence, Diploma's, ...) the issuer
 ```bash
 python -m issuer.issuer -p <issuer> issue --holder wallet --type <credential> -y
 ```
-This will issue a credential the issuer has acces to for the holder_device and creates a <credential>_credential.json file in the data subfolder.
+This will issue a credential the issuer has acces to for the holder (in our case the wallet?) and creates a <credential>_credential.json file in the data subfolder.
 
 ### Revoke credentials
 ```bash
