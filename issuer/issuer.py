@@ -15,10 +15,7 @@ TRUSTED_ISSUERS_FILE = os.path.join(DATA_DIR, "trusted_issuers.json")
 REVOCATION_FILE = os.path.join(DATA_DIR, "revocation_list.json")
 
 
-party_mapping = {
-    "ugent" : "UGent",
-    "BEgov" : "Belgian Government",
-}
+
 
 DATA : dict[str, dict] = {
     "student_id" : {
@@ -84,11 +81,16 @@ def load_issuers() -> dict:
     with(open(TRUSTED_ISSUERS_FILE, "r")) as f:
         return json.load(f)
     
+def get_parties():
+    issuers = load_issuers()
+    parties = [e["name"] for e in issuers["trusted_issuers"]]
+    return parties
+    
 def resolve_issuer_name(issuer):
-    if issuer not in party_mapping:
+    if issuer not in get_parties():
         die(f"Error: Issuer '{issuer}' not found in party mapping.")
     
-    party = party_mapping[issuer]
+    party = issuer
     issuers = load_issuers()
     entry = None
     issuers = issuers["trusted_issuers"]
@@ -124,9 +126,10 @@ def _warn(msg: str):
 #    with open(path) as f:
 #        return f.read()
     
-def save_credential(credential: dict, credential_type : str):
+def save_credential(credential: dict, credential_type : str, jti: str) -> str:
     os.makedirs(DATA_DIR, exist_ok=True)
-    out = os.path.join(DATA_DIR, f"{credential_type.lower()}_credential.json")
+    os.makedirs(os.path.join(DATA_DIR, "issued_credentials"), exist_ok=True)
+    out = os.path.join(DATA_DIR, "issued_credentials", f"{credential_type.lower()}_{jti}.json")
     with open(out, "w") as f:
         json.dump(credential, f, indent=2)
     return out
@@ -258,7 +261,7 @@ def cmd_issue(party: str, entry: dict, args):
     )
 
     # 8. Persist to data/
-    out_path = save_credential(bundle, credential_types)
+    out_path = save_credential(bundle, credential_types, jti)
 
     print()
     ok(f"Credential issued successfully.")
@@ -296,9 +299,9 @@ Examples:
     parser.add_argument(
         "-p", "--party",
         required=True,
-        choices=list(party_mapping.keys()),
+        choices=list(get_parties()),
         metavar="PARTY",
-        help=f"Which issuer to act as. Choices: {', '.join(party_mapping)}",
+        help=f"Which issuer to act as. Choices: {', '.join(get_parties())}",
     )
 
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
