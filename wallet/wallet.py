@@ -3,6 +3,9 @@ import os
 import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from crypto.keys import load_private_key
+from crypto.signing import sign
+
 # --- Directories ---
 BASE_DIR = os.path.join(os.path.dirname(__file__), '..')
 STORAGE_DIR = os.path.join(os.path.dirname(__file__), 'storage', 'credentials')
@@ -48,6 +51,11 @@ def is_trusted_issuer(issuer_name: str, issuer_pub_key: str) -> bool:
             return registered_pem.strip() == issuer_pub_key.strip()
 
     return False
+
+def simulate_user_presence():
+    print("\n[TEE OPERATION] Biometric confirmation required.")
+    input("Press ENTER to confirm presence (simulates fingerprint scan): ")
+    print("User presence verified\n")
 
 # --- Commands ---
 def list_credentials():
@@ -157,7 +165,106 @@ def receive_credentials():
     _ok("Credentials successfully stored in wallet!")
 
 def present_credentials():
-    pass
+    """
+    Select a credential and present it to a verifier
+    """
+    os.makedirs(STORAGE_DIR, exist_ok=True)
+    files = [f for f in os.listdir(STORAGE_DIR) if f.endswith('.json')]
+
+    print("\n"+"=" * 40)
+    print("Select Credential to present")
+    print("=" * 40)
+
+    valid_files = []
+    for i, f in enumerate(files, 1):
+        path = os.path.join(STORAGE_DIR, f)
+        with open(path) as file:
+            cred = json.load(file)
+
+        jti = cred.get("jti", "")
+        if is_revoked(jti):
+            print(f"[{i}] {cred.get('credential_type')} revoked - cannot present")
+        else:
+            print(f"[{i}] {cred.get('credential_type')} valid")
+            valid_files.append((i, f, cred))
+
+    print("[0] Cancel")
+
+    choice = input("\nSelect credential: ").strip()
+
+    if choice == "0":
+        _info("Presentation was canceled")
+        return
+
+    try:
+        selected = next(
+            (f, c) for i, f, c in valid_files if str(i) == choice
+        )
+    except StopIteration:
+        _err("Invalid selection or credential revoked")
+        return
+
+    filename, credential = selected
+
+    # Show what will be disclosed.
+    # In a real system the verifier specifies what it needs
+    # Here we let the user choose for demo purposes
+    print("\n" + "=" * 40)
+    print("Select claims to disclose")
+    print("=" * 40)
+    print("(In a real system the verifier specifies this)")
+
+    disclosures = credential.get("disclosures", {})
+    claim_keys = list(disclosures.keys())
+
+    for i, key in enumerate(claim_keys, 1):
+        print(f"[{i}] {key}: {disclosures[key]}")
+    print("\n Enter claim numbers to disclose (comma separated e.g. 1,2,3)")
+    choices = input("> ").strip().split(",")
+
+    try:
+        selected_claims = {
+            claim_keys[int(c.strip()) - 1]: disclosures[claim_keys[int(c.strip()) - 1]]
+            for c in choices
+        }
+    except (ValueError, IndexError):
+        _err("Invalid selection")
+        return
+    
+    # Show consent summary
+    print("\n" + "=" * 40)
+    print("Consent summary")
+    print("=" * 40)
+    print("You are about to share:")
+    for key, value in selected_claims.items():
+        print(f"{key}: {value}")
+    print("The follwing will NOT be shared")
+    for key in disclosures:
+        if key not in selected_claims:
+            print(f"{key}")
+
+    print("=" * 40)
+
+    answer = input("\nConfirm presentation [y/N]: ").strip().lower()
+    if answer != "y":
+        _info("Presentation was cancelled")
+        return
+
+    # Simulate biometric confirmation here
+    # [TEE OPERATION]
+    simulate_user_presence()
+
+    # Get nonce from verifier
+    # TODO: verifier must send this
+    nonce = input("Enter nonce from verifier (or press ENTER for demo): ").strip()
+    if not nonce:
+        import secrets
+        nonce = secrets.token_hex(16)
+        _info(f"Using demo nonce: {nonce}")
+
+    # Build presentation
+    # [TEE OPERATION]
+    #TODO: build and send presentation
 
 # --- Main menu ---
 def main_menu():
