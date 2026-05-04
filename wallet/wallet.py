@@ -13,6 +13,7 @@ REVOCATION_FILE = os.path.join(BASE_DIR, 'data', 'revocation_list.json')
 ISSUERS_FILE = os.path.join(BASE_DIR, 'data', 'trusted_issuers.json')
 INCOMING_DIR = os.path.join(BASE_DIR, 'data', 'issued_credentials')
 PRESENTATION_DIR = os.path.join(BASE_DIR, 'data', 'presentations')
+DEVICE_KEY_DIR = os.path.join(os.path.dirname(__file__), 'device_keys')
 
 # --- Messages ---
 def _info(msg): print(f"\n[INFO]: {msg}")
@@ -264,7 +265,33 @@ def present_credentials():
 
     # Build presentation
     # [TEE OPERATION]
-    #TODO: build and send presentation
+    private_key = load_private_key(os.path.join(DEVICE_KEY_DIR, 'private_key.pem'))
+
+    presentation_data = {
+        "disclosed_claims": selected_claims,
+        "nonce": nonce,
+        "issuer": credential.get("issuer"),
+        "credential_type": credential.get("credential_type"),
+        "jti": credential.get("jti")
+    }
+
+    signature = sign(presentation_data, private_key)
+
+    presentation = {
+        **presentation_data,
+        "device_sig": signature,
+        "issuer_sig": credential.get("issuer_signature"),
+    }
+
+    # Save to data/presentations/
+    os.makedirs(PRESENTATION_DIR, exist_ok=True)
+    import uuid
+    out_path = os.path.join(PRESENTATION_DIR, f"presentation_{uuid.uuid4().hex[:8]}.json")
+    with open(out_path, "w") as f:
+        json.dump(presentation, f, indent=2)
+
+    _ok("Presentation created and sent to verifier")
+    _info(f"Output: {out_path}")
 
 # --- Main menu ---
 def main_menu():

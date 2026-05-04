@@ -1,0 +1,13 @@
+{
+  "disclosed_claims": {
+    "first_name": "Alice",
+    "last_name": "Bobson",
+    "student_id": "123456"
+  },
+  "nonce": "5965fa33583bea292180fae980310b62",
+  "issuer": "UGent",
+  "credential_type": "student_id",
+  "jti": "test-123",
+  "device_sig": "MEQCIHLgPRPY7bqfr7CeuepbT/V4r5Z3GQ549pAlwEITVQ7KAiBL+62nTsAdIQJ21K4hhDC2B++thQs3Z6Cj+9RE1Fnj4g==",
+  "issuer_sig": "placeholder_signature"
+}

@@ -7,6 +7,7 @@ from crypto.keys import generate_keypair, save_keypair
 parties = [
     "issuer/issuer_keys/ugent",
     "issuer/issuer_keys/belgian_government",
+    "wallet/device_keys",
 ]
 
 for dir in parties:
