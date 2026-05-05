@@ -260,6 +260,9 @@ def cmd_issue(party: str, entry: dict, args):
         credential_type=credential_types,
     )
 
+    with open(public_key_path, "r") as f:
+        bundle["issuer_public_key"] = f.read()
+
     # 8. Persist to data/
     out_path = save_credential(bundle, credential_types, jti)
 
