@@ -204,7 +204,7 @@ def cmd_issue(party: str, entry: dict, args):
         die(f"No keys found for '{key_id}'. Run 'init' first.")
     private_key = load_private_key(path)
     public_key_path = os.path.join(dir, 'public_key.pem')
-    public_key = load_public_key(path)
+    public_key = load_public_key(public_key_path)
     holder_public_pem = load_public_key(os.path.join(BASE_DIR, "wallet", "device_keys", "public_key.pem"))
 
 
@@ -255,11 +255,15 @@ def cmd_issue(party: str, entry: dict, args):
     # 7. Create the SD-JWT
     bundle = create_sd_jwt(
         claims=claims,
-        issuer_public_key=public_key,
+        issuer_private_key=private_key,
         issuer_id=party,
         holder_public_key_pem=holder_public_pem,
         credential_type=credential_types,
     )
+
+    # Add issuer public key to bundle afterward
+    with open(public_key_path, "r") as f:
+        bundle["issuer_public_key"] = f.read()
 
     # 8. Persist to data/
     out_path = save_credential(bundle, credential_types, jti)
