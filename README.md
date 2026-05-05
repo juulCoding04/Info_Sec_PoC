@@ -20,6 +20,8 @@ An attacker script demonstrates how specific attacks are prevented.
 
 ## Getting started
 
+!!!Before working on this project, make sure you read the architecture.md documentation in the docs/ directory!!!
+
 ### Requirements
 - Python 3.10 or higher
 
