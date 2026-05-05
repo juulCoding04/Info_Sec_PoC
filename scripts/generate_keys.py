@@ -7,7 +7,7 @@ from crypto.keys import generate_keypair, save_keypair
 parties = [
     "issuer/issuer_keys/ugent",
     "issuer/issuer_keys/belgian_government",
-    "wallet/device_keys",
+    "wallet/device_keys"
 ]
 
 for dir in parties:
@@ -18,3 +18,4 @@ for dir in parties:
     priv, pub = generate_keypair()
     save_keypair(priv, pub, dir)
     print(f"Keys have been saved to {dir}")
+

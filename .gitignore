@@ -28,3 +28,6 @@ issuer/issuer_keys/
 wallet/device_keys/
 verifier/verifier_keys/
 attacker/attacker_keys/
+
+#issued credentials
+data/issued_credentials/
