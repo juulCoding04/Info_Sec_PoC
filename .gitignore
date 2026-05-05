@@ -31,3 +31,5 @@ attacker/attacker_keys/
 
 #issued credentials
 data/issued_credentials/
+wallet/storage/credentials/
+data/presentations/
