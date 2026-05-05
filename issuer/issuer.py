@@ -45,7 +45,7 @@ DATA : dict[str, dict] = {
             "graduation_year" : "2026"
         },
     },
-    "ID_card" : {
+    "national_id" : {
         "first_name" : "Alice",
         "last_name" : "Bobson",
         "date_of_birth" : "01/01/2004",
