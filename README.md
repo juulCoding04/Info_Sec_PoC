@@ -52,3 +52,36 @@ Run script to initialize all keys
 ```bash
 python scripts/generate_keys.py
 ```
+
+
+## Issuer commands
+
+### setup
+Run these commands once for each the issuers defined in trusted_issuers.json to check the keys have been generated:
+```bash
+python -m issuer.issuer -p <issuer> init
+```
+with <issuer> the name of the issuer as defined in the party_mapping dict in issuer.py
+This will create keys for the issuers if generate_keys.py failed. Add --force to overwrite the existing keys. 
+
+### List credential types of issuer
+
+```bash
+python -m issuer.issuer -p <issuer> list-types
+```
+Will provide all the credentials (ID, Driver Licence, Diploma's, ...) the issuer has acces to.
+
+### Issue credentials
+
+```bash
+python -m issuer.issuer -p <issuer> issue --holder wallet --type <credential> -y
+```
+This will issue a credential the issuer has acces to for the holder (in our case the wallet?) and creates a <credential>_credential.json file in the data subfolder.
+
+### Revoke credentials
+```bash
+python -m issuer.issuer -p <issuer> revoke --jti <Credential ID (jti)>
+```
+the Credential ID (jti) is printed when issueing a credential.
+
+
