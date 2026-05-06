@@ -96,3 +96,46 @@ def create_sd_jwt(
         "disclosures": disclosures,
         "credential_type": credential_type,
     }
+
+def verify_sd_jwt(jwt_token: str, issuer_public_key) -> bool:
+    """
+    Verify the issuer's ECDSA P-256 signature over the JWT.
+    Returns True if valid, False if tampered
+    """
+    try:
+        parts = jwt_token.split(".")
+        if len(parts) != 3:
+            return False
+
+        header_64, payload_64, signature_64 = parts
+        signing_input = f"{header_64}.{payload_64}"
+
+        # Decode the signature
+        padded = signature_64 + "=" * (4 - len(signature_64) % 4)
+        signature_bytes = base64.urlsafe_b64decode(padded)
+
+        # Verify
+        issuer_public_key.verify(
+            signature_bytes,
+            signing_input.encode(),
+            ec.ECDSA(hashes.SHA256())
+        )
+        return True
+    except Exception:
+        return False
+
+def verify_holder_binding(jwt_token: str, holder_public_key: str) -> bool:
+    """
+    Verify that the credential was issued to this specific device.
+    This is an anti cloning check
+    """
+    try:
+        payload_64 = jwt_token.split(".")[1]
+        padded = payload_64 + "=" * (4 - len(payload_64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode())
+
+        cnf_key = payload.get("cnf", {}).get("jwk", "").strip()
+        return cnf_key == holder_public_key.strip()
+
+    except Exception:
+        return False

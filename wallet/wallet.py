@@ -2,10 +2,12 @@ import sys
 import os
 import json
 import base64
+import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from crypto.keys import load_private_key
+from crypto.keys import load_private_key, load_public_key
 from crypto.signing import sign
+from crypto.sd_jwt import verify_holder_binding, verify_sd_jwt
 
 # --- Directories ---
 BASE_DIR = os.path.join(os.path.dirname(__file__), '..')
@@ -23,7 +25,6 @@ def _ok(msg): print(f"\n[OK] {msg}")
 def _err(msg): print(f"\n[ERR]: {msg}")
 
 # --- Helper functions ---
-# --- Helpers ---
 def decode_disclosure(encoded: str) -> tuple:
     """
     decode a base64 SD-JWT disclosure
@@ -54,7 +55,17 @@ def get_jwt_payload(cred: dict) -> dict:
     except Exception:
         return {}
 
+def is_expired(cred: dict) -> bool:
+    payload = get_jwt_payload(cred)
+    exp = payload.get("exp")
+    if exp is None:
+        return False
+    return time.time() > exp
+
 def is_revoked(jti: str) -> bool:
+    # [NETWORK OPERATION]
+    # In real life the wallet would query the issuer's revocation service
+    # In this PoC we simulate this using a JSON file
     if not os.path.exists(REVOCATION_FILE):
         return False
     with open(REVOCATION_FILE) as f:
@@ -64,6 +75,9 @@ def is_revoked(jti: str) -> bool:
 def is_trusted_issuer(issuer_name: str, issuer_pub_key: str) -> bool:
     """
     Check if an issuer is in the trusted registry. This function checks both name and public key so a malicious party cannot impersonate a trusted issuer by name alone.
+    
+    [NETWORK OPERATION]
+    In real life the wallet would check this against a national Trusted List, in this PoC we mock this using a JSON file
     """
     if not os.path.exists(ISSUERS_FILE):
         _warn("Trusted issuers list not found")
@@ -86,6 +100,8 @@ def is_trusted_issuer(issuer_name: str, issuer_pub_key: str) -> bool:
     return False
 
 def simulate_user_presence():
+    # [TEE OPERATION]
+    # In real life this communication travels from biometric sensor to the TEE, bypassing the OS
     print("\n[TEE OPERATION] Biometric confirmation required.")
     input("Press ENTER to confirm presence (simulates fingerprint scan): ")
     print("User presence verified\n")
@@ -96,7 +112,6 @@ def list_credentials():
     Shows all credentials stored in wallet/storage/
     """
     os.makedirs(STORAGE_DIR, exist_ok=True)
-    # store all files with .json extension in a list
     files = [f for f in os.listdir(STORAGE_DIR) if f.endswith('.json')]
 
     if not files:
@@ -114,7 +129,12 @@ def list_credentials():
 
         payload = get_jwt_payload(cred)
         jti = payload.get("jti", "")
-        status = "!!! Revoked !!!" if is_revoked(jti) else "VALID"
+        if is_revoked(jti):
+            status = "!!! REVOKED !!!"
+        elif is_expired(cred):
+            status = "!!! EXPIRED !!!"
+        else:
+            status = "VALID"
         cred_type = cred.get("credential_type", "unknown")
         issuer = payload.get("iss", "unknown")
         print(f"[{i}] {cred_type} - {issuer} {status}")
@@ -125,6 +145,9 @@ def receive_credentials():
     Pick up pending credentials from data/issued_credentials/
     """
     os.makedirs(INCOMING_DIR, exist_ok=True)
+    # [NETWORK OPERATION]
+    # In real life the issuer would deliver the credential directly to the wallet over a TLS connection
+    # In this PoC this is simulated by reading data/issued_credentials/
     files = [f for f in os.listdir(INCOMING_DIR) if f.endswith('.json')]
 
     if not files:
@@ -179,6 +202,9 @@ def receive_credentials():
     print("=" * 40)
 
     # Check if issuer is trusted before asking user to confirm
+    # [NETWORK OPERATION]
+    # In real life this queries the national Trusted List
+    # In this PoC this reads from trusted_issuers.json
     issuer_pub_key_pem = cred.get("issuer_public_key", "")
     if not issuer_pub_key_pem:
         _warn("No issuer public key in credentials")
@@ -186,9 +212,41 @@ def receive_credentials():
 
     if not is_trusted_issuer(issuer_name, issuer_pub_key_pem):
         _warn(f"Issuer {issuer_name}, is NOT a trusted issuer")
-        _warn(f"Accepting this credential may be risky")
+        return
     else:
         _ok("Issuer is trusted")
+
+    # Verify issuer signature
+    with open(ISSUERS_FILE) as f:
+        registry = json.load(f)
+
+    issuer_pub_key_path = next(
+        (i["public_key_path"] for i in registry["trusted_issuers"] if i["name"] == issuer_name), None
+    )
+
+    if not issuer_pub_key_path:
+        _warn("Cannot find issuers public key path")
+        return
+
+    issuer_pub_key_obj = load_public_key(issuer_pub_key_path)
+
+    if not verify_sd_jwt(cred["jwt"], issuer_pub_key_obj):
+        _warn("Issuer signature verification FAILED. Credential may be tampered with")
+        return
+
+    _ok("Issuer signature verified")
+
+    # Verify holder binding
+    # [TEE OPERATION]
+    # In real life the device key would be hardware boud.
+    with open(os.path.join(DEVICE_KEY_DIR, "public_key.pem"), "r") as f:
+        this_device_key = f.read()
+
+    if not verify_holder_binding(cred["jwt"], this_device_key):
+        _warn("Holder binding check FAILED. Credential was not issued to this device")
+        return
+
+    _ok("Holder binding verified")
 
     answer = input("\nAccept this credential? [y/N]: ").strip().lower()
     if answer != "y":
@@ -231,6 +289,8 @@ def present_credentials():
 
         if is_revoked(jti):
             print(f"[{i}] {credential_type} revoked - cannot present")
+        elif is_expired(cred):
+            print(f"[{i}] {credential_type} expired - cannot present")
         else:
             print(f"[{i}] {credential_type} valid")
             valid_files.append((i, f, cred))
@@ -302,6 +362,9 @@ def present_credentials():
     simulate_user_presence()
 
     # Get nonce from verifier
+    # [NETWORK OPERATION]
+    # In real life the verifier sends a fresh random nonce with every presentation.
+    # In this PoC we ask the user to manually enter the nonce
     # TODO: verifier must send this
     nonce = input("Enter nonce from verifier (or press ENTER for demo): ").strip()
     if not nonce:
@@ -311,6 +374,7 @@ def present_credentials():
 
     # Build presentation
     # [TEE OPERATION]
+    # In real life this siging operation happens inside the TEE
     private_key = load_private_key(os.path.join(DEVICE_KEY_DIR, 'private_key.pem'))
 
     payload = get_jwt_payload(credential)
@@ -330,7 +394,9 @@ def present_credentials():
         "issuer_jwt": credential.get("jwt")
     }
 
-    # Save to data/presentations/
+    # [NETWORK OPERATION]
+    # In real life the wallet sent directly to the verifier
+    # In this PoC this is simulated by saving to data/presentations/
     os.makedirs(PRESENTATION_DIR, exist_ok=True)
     import uuid
     out_path = os.path.join(PRESENTATION_DIR, f"presentation_{uuid.uuid4().hex[:8]}.json")
