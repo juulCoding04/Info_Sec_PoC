@@ -1,117 +1,114 @@
-# Attack demonstrations
+# Attacker Demo
 
-The attacker module can be run either as an interactive CLI or with direct
-commands. Direct commands are useful for repeatable demos and tests.
+The attacker component is an interactive CLI for creating attack demo files.
+It does not attack a live network service. Instead, it writes manipulated
+credential files into the project folders so the wallet can process them through
+its normal flows.
 
-<!-- ```bash
-python -m attacker.attacker # Interactive CLI
-python -m attacker.attacker list # List available attacks
-python -m attacker.attacker options # List issuers and credential types
-python -m attacker.attacker run fake-issuer --issuer UGent --type student_id --public-key-mode attacker
-python -m attacker.attacker run tamper-credential --input data/issued_credentials/example.json --mode jwt-payload --field credential_type --value admin_id
-``` -->
-
-## Fake issuer
-
-The fake issuer attack creates a credential that claims to be issued by a
-trusted issuer, but is signed with the attacker's private key. The forged
-credential is written to `data/issued_credentials/`, where the wallet can try
-to import it through the normal "Receive new credentials" flow.
-
-Trust-list demo:
+Start the attacker from the project root:
 
 ```bash
-python -m attacker.attacker run fake-issuer --issuer UGent --type student_id --public-key-mode attacker
+python -m attacker.attacker
 ```
 
-This includes the attacker public key in the credential bundle. The wallet
-should reject this at the trusted issuer public-key check.
+The menu lists the available attacks. Choose an attack by entering its number.
+The CLI then asks for the values it needs, such as which issuer to impersonate,
+which credential type to forge, or which credential file to tamper with.
 
-Signature-verification demo:
+## Menu Options
+
+`List attacks` shows the attacks currently registered in `attacker/attacker.py`.
+
+`Show issuer/credential options` lists the issuers and credential types from
+`data/trusted_issuers.json`. These are the identities an attacker can try to
+impersonate in the fake issuer demo.
+
+`fake-issuer` creates a new credential that claims to come from a trusted issuer
+but is signed by the attacker. The generated credential is written to
+`data/issued_credentials/`. Test it by opening the wallet and choosing
+`Receive new credentials`.
+
+`tamper-credential` modifies an existing credential without re-signing it. The
+CLI can use either pending credentials from `data/issued_credentials/` or stored
+wallet credentials from `wallet/storage/credentials/` as the source. The
+tampered copy is written to `data/issued_credentials/` by default, so it can be
+tested through the wallet import flow.
+
+`clone-credential` does not literally copy an existing credential file. Because
+the PoC only has one wallet, it creates a fresh valid credential using a trusted
+issuer key, binds it to the attacker's device key, and places it in the incoming
+credential inbox: `data/issued_credentials/`. This represents the situation
+where a valid credential from another device is offered to this wallet for
+import. The issuer signature should still be valid, but the wallet should reject
+the credential during holder binding before storing it.
+
+## Fake Issuer
+
+The fake issuer attack asks for three important choices.
+
+`Issuer to impersonate` is the trusted issuer name the forged credential will
+claim to come from, for example `UGent` or `Belgian Government`.
+
+`Credential type` is the credential the attacker wants to forge, such as
+`student_id`, `Diplomas`, `national_id`, `driving_license`, or
+`international_passport`.
+
+`Public key mode` decides which public key is placed inside the forged
+credential:
+
+- `attacker`: the credential claims to come from a trusted issuer but includes
+  the attacker's public key. The wallet should reject it during the trusted
+  issuer public-key check.
+- `registered`: the credential includes the real registered issuer public key,
+  but the JWT is still signed with the attacker's private key. The wallet should
+  reject it during issuer signature verification.
+
+## Tampering with credentials
+
+The tamper credential attack asks where to take the source credential from and
+what kind of tampering to perform.
+
+`jwt-payload` changes a signed JWT payload field, such as `credential_type`,
+`iss`, `jti`, or `exp`. This should break the issuer signature.
+
+`disclosure` changes one selective-disclosure value, such as `first_name` or
+`student_id`. This should be detected by checking whether the changed disclosure
+still hashes to one of the signed `_sd` values.
+
+## Cloning credentials
+
+The clone credential attack asks for the issuer and credential type to use for
+the sample foreign credential. The CLI creates the credential using the issuer's
+real signing key but binds it to the attacker's device key in
+`attacker/attacker_keys/`.
+
+This is a setup shortcut for the PoC, not a literal file-copy operation. It
+represents a valid credential that was issued to another device and then placed
+in the current wallet's import flow. The wallet should reject it before storage
+because the public key in the credential's `cnf` claim does not match
+`wallet/device_keys/public_key.pem`.
+
+## Checking Results
+
+After an attack creates a file in the incoming credential inbox,
+`data/issued_credentials/`, open the wallet:
 
 ```bash
-python -m attacker.attacker run fake-issuer --issuer UGent --type student_id --public-key-mode registered
+python -m wallet.wallet
 ```
 
-This still signs with the attacker private key, but includes the real registered
-issuer public key in the credential bundle. The trusted issuer check should
-pass, but issuer signature verification should fail.
+Choose `Receive new credentials` and select the attack file. In this PoC,
+`Receive new credentials` means the wallet is reviewing pending incoming files
+before importing them into `wallet/storage/credentials/`. A successful defense
+means the wallet rejects the credential before storing it.
 
-### Public key mode
+Expected outcomes:
 
-`--public-key-mode` controls which public key the attacker puts in the forged
-credential file:
+- Fake issuer with attacker key: rejected by trusted issuer public-key check.
+- Fake issuer with registered key: rejected by issuer signature verification.
+- JWT payload tampering: rejected by issuer signature verification.
+- Disclosure tampering: rejected if disclosure hash verification is implemented.
+- Cloned credential: rejected by holder binding check.
 
-- `attacker`: the forged credential says `iss = UGent`, but embeds the
-  attacker's public key. The wallet should reject it because the embedded key
-  does not match UGent's registered key.
-- `registered`: the forged credential says `iss = UGent` and embeds UGent's
-  real registered public key, but the JWT was still signed by the attacker. The
-  wallet should get past the trusted issuer check and then reject it because the
-  issuer signature is invalid.
-
-### Issuer and credential choices
-
-The available impersonation targets come from `data/trusted_issuers.json`.
-Use this command to list them:
-
-```bash
-python -m attacker.attacker options
-```
-
-Other examples:
-
-```bash
-python -m attacker.attacker run fake-issuer --issuer "Belgian Government" --type national_id --public-key-mode attacker
-python -m attacker.attacker run fake-issuer --issuer "Belgian Government" --type driving_license --public-key-mode attacker
-python -m attacker.attacker run fake-issuer --issuer "Belgian Government" --type international_passport --public-key-mode registered
-python -m attacker.attacker run fake-issuer --issuer UGent --type student_id --public-key-mode attacker --claims "{\"first_name\":\"Mallory\",\"last_name\":\"Attacker\"}"
-python -m attacker.attacker run fake-issuer --issuer UGent --type Diplomas --public-key-mode registered
-```
-
-## Tamper credential
-
-The tamper credential attack modifies an existing credential JSON file without
-re-signing it. The original file is left untouched. The tampered copy is written
-to `data/issued_credentials/`, so the wallet can try to import it through the
-normal "Receive new credentials" flow.
-
-There are two modes:
-
-- `jwt-payload`: changes a signed JWT payload field, such as `iss`, `jti`,
-  `credential_type`, or `exp`. The wallet should reject this at issuer
-  signature verification.
-- `disclosure`: changes one selective-disclosure value, such as `first_name` or
-  `student_id`. This should be rejected if the wallet verifies disclosure hashes
-  against the signed `_sd` list.
-
-JWT payload tampering example:
-
-```bash
-python -m attacker.attacker run tamper-credential --input data/issued_credentials/student_id_<jti>.json --mode jwt-payload --field credential_type --value admin_id
-```
-
-Disclosure tampering example:
-
-```bash
-python -m attacker.attacker run tamper-credential --input data/issued_credentials/student_id_<jti>.json --mode disclosure --field first_name --value Mallory
-```
-
-`--value` is parsed as JSON when possible. Use quotes inside the value when you
-want to force a JSON string in shells that preserve them:
-
-```bash
-python -m attacker.attacker run tamper-credential --input data/issued_credentials/student_id_<jti>.json --mode jwt-payload --field exp --value 1
-python -m attacker.attacker run tamper-credential --input data/issued_credentials/student_id_<jti>.json --mode disclosure --field categories --value "[\"AM\",\"B\",\"C\"]"
-```
-
-## Adding attacks
-
-Add a new attack by creating:
-
-1. A function that performs the attack.
-2. A `configure_<attack>_parser` function for command-line options.
-3. A new entry in the `ATTACKS` registry in `attacker/attacker.py`.
-
-The interactive menu is intentionally thin: it lists registered attacks and can
-add a custom prompt flow for attacks that benefit from guided input.
+If disclosure tampering is accepted, that indicates the wallet still needs a
+disclosure hash verification step.

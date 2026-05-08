@@ -207,6 +207,23 @@ def write_forged_credential(bundle: dict, issuer_name: str, credential_type: str
     return out_path
 
 
+def write_cloned_credential(bundle: dict, issuer_name: str, credential_type: str, jti: str) -> str:
+    os.makedirs(ISSUED_CREDENTIALS_DIR, exist_ok=True)
+
+    issuer_slug = issuer_name.lower().replace(" ", "_")
+    filename = f"cloned_{issuer_slug}_{credential_type}_{jti}.json"
+    out_path = os.path.join(ISSUED_CREDENTIALS_DIR, filename)
+
+    with open(out_path, "w") as file:
+        json.dump(bundle, file, indent=2)
+
+    return out_path
+
+
+def issuer_private_key_path(issuer: dict) -> str:
+    return os.path.join(BASE_DIR, "issuer", "issuer_keys", issuer["key_id"], "private_key.pem")
+
+
 def resolve_input_path(path: str) -> str:
     if os.path.isabs(path):
         return path
@@ -373,6 +390,66 @@ def attack_fake_issuer(args) -> str:
     return out_path
 
 
+def attack_clone_credential(args) -> str:
+    from crypto.keys import load_private_key, load_public_key
+    from crypto.sd_jwt import create_sd_jwt
+
+    issuer = find_issuer(args.issuer)
+    credential_type = args.credential_type
+
+    if credential_type not in issuer.get("allowed_credentials", []):
+        allowed = ", ".join(issuer.get("allowed_credentials", []))
+        die(
+            f"'{issuer['name']}' is not registered for credential type '{credential_type}'. "
+            f"Allowed: {allowed}"
+        )
+
+    private_key_path = issuer_private_key_path(issuer)
+    if not os.path.exists(private_key_path):
+        die(f"Issuer private key not found: {private_key_path}")
+
+    ensure_attacker_keys(force=args.force_keys)
+
+    issuer_private_key = load_private_key(private_key_path)
+    other_device_public_key = load_public_key(os.path.join(ATTACKER_KEY_DIR, "public_key.pem"))
+
+    jti = str(uuid.uuid4())
+    claims = load_claims(credential_type, args.claims)
+    claims["jti"] = jti
+    claims["credential_type"] = credential_type
+
+    cloned = create_sd_jwt(
+        claims=claims,
+        issuer_private_key=issuer_private_key,
+        issuer_id=issuer["name"],
+        holder_public_key_pem=other_device_public_key,
+        credential_type=credential_type,
+    )
+
+    cloned["issuer_public_key"] = get_public_key_for_bundle(issuer, "registered")
+    cloned["attack_metadata"] = {
+        "attack": "clone-credential",
+        "description": (
+            "PoC setup shortcut: creates a fresh valid credential bound to another "
+            "device key and places it in the incoming credential inbox."
+        ),
+        "claimed_issuer": issuer["name"],
+        "credential_type": credential_type,
+        "bound_to": "attacker/attacker_keys/public_key.pem",
+        "expected_wallet_result": "Rejected by holder binding check",
+    }
+
+    out_path = write_cloned_credential(cloned, issuer["name"], credential_type, jti)
+
+    _ok("Foreign-device credential created.")
+    _info(f"Claimed issuer: {issuer['name']}")
+    _info(f"Credential type: {credential_type}")
+    _info("Credential is validly signed, but bound to attacker/attacker_keys/public_key.pem.")
+    _info("Expected wallet result: Rejected by holder binding check")
+    _info(f"Output file: {out_path}")
+    return out_path
+
+
 @dataclass(frozen=True)
 class AttackSpec:
     name: str
@@ -439,6 +516,29 @@ def configure_tamper_credential_parser(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--output",
         help="Optional output path. Without this, the tampered file is written to data/issued_credentials/.",
+    )
+
+
+def configure_clone_credential_parser(parser: argparse.ArgumentParser):
+    parser.add_argument(
+        "--issuer",
+        required=True,
+        help="Trusted issuer name for the original credential. Use 'python -m attacker.attacker options' to list choices.",
+    )
+    parser.add_argument(
+        "--type",
+        dest="credential_type",
+        required=True,
+        help="Credential type to clone. Use 'python -m attacker.attacker options' to list choices.",
+    )
+    parser.add_argument(
+        "--claims",
+        help='Optional JSON claims object, for example: \'{"first_name":"Mallory"}\'',
+    )
+    parser.add_argument(
+        "--force-keys",
+        action="store_true",
+        help="Regenerate the other-device key pair before creating the cloned credential.",
     )
 
 
@@ -568,6 +668,31 @@ def run_tamper_credential_interactive():
     attack_tamper_credential(args)
 
 
+def run_clone_credential_interactive():
+    issuers = [issuer["name"] for issuer in trusted_issuer_entries()]
+    if not issuers:
+        die("No trusted issuers found in data/trusted_issuers.json.")
+
+    print("\nClone credential attack")
+    print("=" * 40)
+    issuer_name = prompt_choice("Original issuer", issuers)
+    issuer = find_issuer(issuer_name)
+
+    allowed_types = issuer.get("allowed_credentials", [])
+    credential_type = prompt_choice("Credential type", allowed_types)
+
+    print("\nPress ENTER to use the built-in claim template, or paste a JSON object for custom claims.")
+    claims = input("> ").strip() or None
+
+    args = argparse.Namespace(
+        issuer=issuer_name,
+        credential_type=credential_type,
+        claims=claims,
+        force_keys=False,
+    )
+    attack_clone_credential(args)
+
+
 def interactive_menu():
     while True:
         print("\n" + "=" * 40)
@@ -575,7 +700,7 @@ def interactive_menu():
         print("=" * 40)
         attacks = list(ATTACKS.values())
         for index, attack in enumerate(attacks, 1):
-            print(f"[{index}] {attack.name} - {attack.description}")
+            print(f"[{index}] {attack.name}")
         print("[l] List attacks")
         print("[o] Show issuer/credential options")
         print("[q] Quit")
@@ -616,6 +741,13 @@ ATTACKS = {
         configure_parser=configure_tamper_credential_parser,
         run=attack_tamper_credential,
         run_interactive=run_tamper_credential_interactive,
+    ),
+    "clone-credential": AttackSpec(
+        name="clone-credential",
+        description="Create a valid credential bound to another device key and place it in the incoming credential inbox.",
+        configure_parser=configure_clone_credential_parser,
+        run=attack_clone_credential,
+        run_interactive=run_clone_credential_interactive,
     ),
 }
 
