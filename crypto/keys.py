@@ -12,7 +12,7 @@ def generate_keypair():
     private_key = ec.generate_private_key(ec.SECP256K1())
     public_key = private_key.public_key()
 
-    print("ECDSA key pair generated succesfully.")
+    # print("ECDSA key pair generated succesfully.")
 
     return private_key, public_key
 
@@ -44,7 +44,7 @@ def save_keypair(private_key, public_key, dir):
     with open(f"{dir}/public_key.pem", "wb") as f:
         f.write(pem_pub_key)
 
-    print(f"Keys saved to {dir}/")
+    #print(f"Keys saved to {dir}/")
 
 # load private key
 def load_private_key(path):

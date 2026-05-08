@@ -32,4 +32,5 @@ attacker/attacker_keys/
 #issued credentials
 data/issued_credentials/
 wallet/storage/credentials/
+wallet/wallet_pin.json
 data/presentations/
