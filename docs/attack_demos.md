@@ -3,13 +3,13 @@
 The attacker module can be run either as an interactive CLI or with direct
 commands. Direct commands are useful for repeatable demos and tests.
 
-```bash
+<!-- ```bash
 python -m attacker.attacker # Interactive CLI
 python -m attacker.attacker list # List available attacks
 python -m attacker.attacker options # List issuers and credential types
 python -m attacker.attacker run fake-issuer --issuer UGent --type student_id --public-key-mode attacker
 python -m attacker.attacker run tamper-credential --input data/issued_credentials/example.json --mode jwt-payload --field credential_type --value admin_id
-```
+``` -->
 
 ## Fake issuer
 
