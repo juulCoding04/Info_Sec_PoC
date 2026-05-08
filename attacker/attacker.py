@@ -30,6 +30,20 @@ CLAIM_TEMPLATES = {
         "phone_number": "123456789",
         "valid_until": "30/09/2028",
     },
+    "Diplomas": {
+        "secondary_education": {
+            "school_name": "High School of Ghent",
+            "graduation_year": "2024",
+            "degree": "Secondary Education Diploma",
+            "field": "Mathematics and Sciences",
+        },
+        "bachelor_degree": {
+            "university": "Ghent University",
+            "faculty": "Engineering and Architecture",
+            "degree": "Bachelor of Science in Computer Science",
+            "graduation_year": "2026",
+        },
+    },
     "national_id": {
         "first_name": "Mallory",
         "last_name": "Attacker",
@@ -48,6 +62,17 @@ CLAIM_TEMPLATES = {
         "expiration_date": "10/01/2032",
         "issuing_authority": "Belgian Government",
         "categories": ["AM", "B"],
+    },
+    "international_passport": {
+        "first_name": "Mallory",
+        "last_name": "Attacker",
+        "date_of_birth": "01/01/2004",
+        "passport_number": "X99999999",
+        "issue_date": "01/01/2024",
+        "expiration_date": "01/01/2031",
+        "nationality": "Belgian",
+        "gender": "Female",
+        "issuing_authority": "Belgian Government",
     },
 }
 
@@ -87,22 +112,17 @@ def load_trusted_issuers() -> dict:
         return json.load(file)
 
 
-def find_issuer(issuer_name: str) -> dict:
-    registry = load_trusted_issuers()
+def trusted_issuer_entries() -> list[dict]:
+    return load_trusted_issuers().get("trusted_issuers", [])
 
-    for issuer in registry.get("trusted_issuers", []):
+
+def find_issuer(issuer_name: str) -> dict:
+    for issuer in trusted_issuer_entries():
         if issuer["name"] == issuer_name:
             return issuer
 
-    known = ", ".join(i["name"] for i in registry.get("trusted_issuers", []))
+    known = ", ".join(i["name"] for i in trusted_issuer_entries())
     die(f"Unknown issuer '{issuer_name}'. Known issuers: {known}")
-
-
-def default_credential_type(issuer: dict) -> str:
-    allowed = issuer.get("allowed_credentials", [])
-    if not allowed:
-        die(f"Issuer '{issuer['name']}' has no allowed credentials in the registry.")
-    return allowed[0]
 
 
 def load_claims(credential_type: str, claims_json: str | None) -> dict:
@@ -159,7 +179,7 @@ def attack_fake_issuer(args) -> str:
     from crypto.sd_jwt import create_sd_jwt
 
     issuer = find_issuer(args.issuer)
-    credential_type = args.credential_type or default_credential_type(issuer)
+    credential_type = args.credential_type
 
     if credential_type not in issuer.get("allowed_credentials", []):
         allowed = ", ".join(issuer.get("allowed_credentials", []))
@@ -225,19 +245,19 @@ class AttackSpec:
 def configure_fake_issuer_parser(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--issuer",
-        default="UGent",
-        help="Trusted issuer name to impersonate. Default: UGent",
+        required=True,
+        help="Trusted issuer name to impersonate. Use 'python -m attacker.attacker options' to list choices.",
     )
     parser.add_argument(
         "--type",
         dest="credential_type",
-        default=None,
-        help="Credential type to forge. Defaults to the issuer's first allowed type.",
+        required=True,
+        help="Credential type to forge. Use 'python -m attacker.attacker options' to list choices.",
     )
     parser.add_argument(
         "--public-key-mode",
         choices=["attacker", "registered"],
-        default="attacker",
+        required=True,
         help=(
             "Which public key to include in the forged bundle. "
             "'attacker' should fail trust checking; 'registered' should fail signature verification."
@@ -245,7 +265,6 @@ def configure_fake_issuer_parser(parser: argparse.ArgumentParser):
     )
     parser.add_argument(
         "--claims",
-        default=None,
         help='Optional JSON claims object, for example: \'{"first_name":"Mallory"}\'',
     )
     parser.add_argument(
@@ -273,38 +292,49 @@ def list_attacks():
     print("")
 
 
-def prompt_choice(prompt: str, choices: list[str], default: str | None = None) -> str:
+def list_impersonation_options():
+    print("\nImpersonation options")
+    print("=" * 40)
+    for issuer in trusted_issuer_entries():
+        print(f"- {issuer['name']}")
+        for credential_type in issuer.get("allowed_credentials", []):
+            template_status = "built-in template" if credential_type in CLAIM_TEMPLATES else "requires --claims"
+            print(f"  * {credential_type} ({template_status})")
+    print("")
+
+
+def prompt_choice(prompt: str, choices: list[str]) -> str:
     while True:
-        suffix = f" [{default}]" if default else ""
-        value = input(f"{prompt}{suffix}: ").strip()
-        if not value and default:
-            return default
+        for index, choice in enumerate(choices, 1):
+            print(f"[{index}] {choice}")
+        value = input(f"{prompt}: ").strip()
+        if value.isdigit():
+            index = int(value) - 1
+            if 0 <= index < len(choices):
+                return choices[index]
         if value in choices:
             return value
-        print(f"Choose one of: {', '.join(choices)}")
+        print(f"Choose a number or one of: {', '.join(choices)}")
 
 
 def run_fake_issuer_interactive():
-    registry = load_trusted_issuers()
-    issuers = [issuer["name"] for issuer in registry.get("trusted_issuers", [])]
+    issuers = [issuer["name"] for issuer in trusted_issuer_entries()]
     if not issuers:
         die("No trusted issuers found in data/trusted_issuers.json.")
 
     print("\nFake issuer attack")
     print("=" * 40)
-    issuer_name = prompt_choice("Issuer to impersonate", issuers, "UGent" if "UGent" in issuers else issuers[0])
+    issuer_name = prompt_choice("Issuer to impersonate", issuers)
     issuer = find_issuer(issuer_name)
 
     allowed_types = issuer.get("allowed_credentials", [])
-    credential_type = prompt_choice("Credential type", allowed_types, default_credential_type(issuer))
+    credential_type = prompt_choice("Credential type", allowed_types)
     public_key_mode = prompt_choice(
         "Public key mode",
         ["attacker", "registered"],
-        "attacker",
     )
 
-    print("\nClaim templates are used by default.")
-    print("Press ENTER to continue, or paste a JSON object to override the claims.")
+    print("\nPress ENTER to use the built-in claim template, or paste a JSON object for custom claims.")
     claims = input("> ").strip() or None
 
     args = argparse.Namespace(
@@ -326,6 +356,7 @@ def interactive_menu():
         for index, attack in enumerate(attacks, 1):
             print(f"[{index}] {attack.name} - {attack.description}")
         print("[l] List attacks")
+        print("[o] Show issuer/credential options")
         print("[q] Quit")
 
         choice = input("\nChoose an attack: ").strip().lower()
@@ -335,11 +366,14 @@ def interactive_menu():
         if choice == "l":
             list_attacks()
             continue
+        if choice == "o":
+            list_impersonation_options()
+            continue
 
         try:
             attack = attacks[int(choice) - 1]
         except (ValueError, IndexError):
-            print("[ERR] Invalid choice.")
+            print("Invalid choice.")
             continue
 
         if attack.name == "fake-issuer":
@@ -356,6 +390,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("list", help="List available attacks")
+    subparsers.add_parser("options", help="List issuers and credential types available for impersonation")
 
     run_parser = subparsers.add_parser("run", help="Run a specific attack")
     run_subparsers = run_parser.add_subparsers(dest="attack")
@@ -377,6 +412,10 @@ def main():
 
     if args.command == "list":
         list_attacks()
+        return
+
+    if args.command == "options":
+        list_impersonation_options()
         return
 
     if args.command == "run":
