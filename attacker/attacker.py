@@ -1,4 +1,5 @@
 import argparse
+import base64
 import json
 import os
 import sys
@@ -8,12 +9,13 @@ from typing import Callable
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-BASE_DIR = os.path.join(os.path.dirname(__file__), "..")
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ATTACKER_KEY_DIR = os.path.join(BASE_DIR, "attacker", "attacker_keys")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 ISSUED_CREDENTIALS_DIR = os.path.join(DATA_DIR, "issued_credentials")
 TRUSTED_ISSUERS_FILE = os.path.join(DATA_DIR, "trusted_issuers.json")
 WALLET_PUBLIC_KEY_FILE = os.path.join(BASE_DIR, "wallet", "device_keys", "public_key.pem")
+WALLET_CREDENTIALS_DIR = os.path.join(BASE_DIR, "wallet", "storage", "credentials")
 
 
 CLAIM_TEMPLATES = {
@@ -88,6 +90,37 @@ def _ok(message: str):
 def die(message: str):
     print(f"[ERR]  {message}")
     sys.exit(1)
+
+
+def b64url_decode(encoded: str) -> bytes:
+    padded = encoded + "=" * (-len(encoded) % 4)
+    return base64.urlsafe_b64decode(padded)
+
+
+def b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def parse_tampered_value(value: str):
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def load_json_file(path: str) -> dict:
+    if not os.path.exists(path):
+        die(f"Input file not found: {path}")
+
+    with open(path, "r") as file:
+        return json.load(file)
+
+
+def write_json_file(path: str, data: dict):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    with open(path, "w") as file:
+        json.dump(data, file, indent=2)
 
 
 def ensure_attacker_keys(force: bool = False):
@@ -174,6 +207,112 @@ def write_forged_credential(bundle: dict, issuer_name: str, credential_type: str
     return out_path
 
 
+def resolve_input_path(path: str) -> str:
+    if os.path.isabs(path):
+        return path
+    return os.path.join(BASE_DIR, path)
+
+
+def credential_files(directory: str) -> list[str]:
+    if not os.path.exists(directory):
+        return []
+
+    return [
+        os.path.join(directory, filename)
+        for filename in sorted(os.listdir(directory))
+        if filename.endswith(".json")
+    ]
+
+
+def default_tampered_output_path(input_path: str, mode: str) -> str:
+    original_name = os.path.basename(input_path)
+    mode_slug = mode.replace("-", "_")
+    return os.path.join(ISSUED_CREDENTIALS_DIR, f"tampered_{mode_slug}_{original_name}")
+
+
+def tamper_jwt_payload(credential: dict, field: str, value):
+    jwt = credential.get("jwt", "")
+    parts = jwt.split(".")
+    if len(parts) != 3:
+        die("Credential does not contain a valid three-part JWT.")
+
+    header_b64, payload_b64, signature_b64 = parts
+    payload = json.loads(b64url_decode(payload_b64).decode())
+    old_value = payload.get(field, "<missing>")
+    payload[field] = value
+
+    tampered_payload_b64 = b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    credential["jwt"] = f"{header_b64}.{tampered_payload_b64}.{signature_b64}"
+
+    return old_value
+
+
+def decode_disclosure(disclosure: str) -> list:
+    decoded = b64url_decode(disclosure).decode()
+    parts = json.loads(decoded)
+    if not isinstance(parts, list) or len(parts) != 3:
+        die("Disclosure is not a valid SD-JWT disclosure array.")
+    return parts
+
+
+def encode_disclosure(parts: list) -> str:
+    return b64url_encode(json.dumps(parts, separators=(",", ":")).encode())
+
+
+def tamper_disclosure(credential: dict, field: str, value):
+    disclosures = credential.get("disclosures", {})
+    if field not in disclosures:
+        known = ", ".join(disclosures.keys())
+        die(f"Disclosure '{field}' not found. Known disclosures: {known}")
+
+    parts = decode_disclosure(disclosures[field])
+    old_value = parts[2]
+    parts[2] = value
+    disclosures[field] = encode_disclosure(parts)
+
+    return old_value
+
+
+def attack_tamper_credential(args) -> str:
+    input_path = resolve_input_path(args.input)
+    output_path = resolve_input_path(args.output) if args.output else default_tampered_output_path(input_path, args.mode)
+    value = parse_tampered_value(args.value)
+    credential = load_json_file(input_path)
+
+    if args.mode == "jwt-payload":
+        old_value = tamper_jwt_payload(credential, args.field, value)
+        expected_result = "Rejected by issuer signature verification"
+    elif args.mode == "disclosure":
+        old_value = tamper_disclosure(credential, args.field, value)
+        expected_result = "Rejected if disclosure hashes are checked against the signed _sd list"
+    else:
+        die(f"Unknown tampering mode '{args.mode}'.")
+
+    metadata = credential.setdefault("attack_metadata", {})
+    metadata.update(
+        {
+            "attack": "tamper-credential",
+            "mode": args.mode,
+            "input_file": input_path,
+            "field": args.field,
+            "old_value": old_value,
+            "new_value": value,
+            "expected_wallet_result": expected_result,
+        }
+    )
+
+    write_json_file(output_path, credential)
+
+    _ok("Tampered credential created.")
+    _info(f"Mode: {args.mode}")
+    _info(f"Field: {args.field}")
+    _info(f"Old value: {old_value}")
+    _info(f"New value: {value}")
+    _info(f"Expected wallet result: {expected_result}")
+    _info(f"Output file: {output_path}")
+    return output_path
+
+
 def attack_fake_issuer(args) -> str:
     from crypto.keys import load_private_key, load_public_key
     from crypto.sd_jwt import create_sd_jwt
@@ -240,6 +379,7 @@ class AttackSpec:
     description: str
     configure_parser: Callable[[argparse.ArgumentParser], None]
     run: Callable[[argparse.Namespace], str | None]
+    run_interactive: Callable[[], None] | None = None
 
 
 def configure_fake_issuer_parser(parser: argparse.ArgumentParser):
@@ -274,14 +414,32 @@ def configure_fake_issuer_parser(parser: argparse.ArgumentParser):
     )
 
 
-ATTACKS = {
-    "fake-issuer": AttackSpec(
-        name="fake-issuer",
-        description="Forge a credential that impersonates a trusted official issuer.",
-        configure_parser=configure_fake_issuer_parser,
-        run=attack_fake_issuer,
-    ),
-}
+def configure_tamper_credential_parser(parser: argparse.ArgumentParser):
+    parser.add_argument(
+        "--input",
+        required=True,
+        help="Credential JSON file to tamper with.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["jwt-payload", "disclosure"],
+        required=True,
+        help="Tamper with signed JWT metadata or with one selective-disclosure value.",
+    )
+    parser.add_argument(
+        "--field",
+        required=True,
+        help="JWT payload claim or disclosure key to change.",
+    )
+    parser.add_argument(
+        "--value",
+        required=True,
+        help='New value. Parsed as JSON when possible, otherwise kept as a string.',
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional output path. Without this, the tampered file is written to data/issued_credentials/.",
+    )
 
 
 def list_attacks():
@@ -317,6 +475,23 @@ def prompt_choice(prompt: str, choices: list[str]) -> str:
         print(f"Choose a number or one of: {', '.join(choices)}")
 
 
+def relative_path(path: str) -> str:
+    return os.path.relpath(path, BASE_DIR)
+
+
+def jwt_payload_fields(credential: dict) -> list[str]:
+    jwt = credential.get("jwt", "")
+    parts = jwt.split(".")
+    if len(parts) != 3:
+        return []
+    payload = json.loads(b64url_decode(parts[1]).decode())
+    return sorted(payload.keys())
+
+
+def disclosure_fields(credential: dict) -> list[str]:
+    return sorted(credential.get("disclosures", {}).keys())
+
+
 def run_fake_issuer_interactive():
     issuers = [issuer["name"] for issuer in trusted_issuer_entries()]
     if not issuers:
@@ -345,6 +520,52 @@ def run_fake_issuer_interactive():
         force_keys=False,
     )
     attack_fake_issuer(args)
+
+
+def run_tamper_credential_interactive():
+    print("\nTamper credential attack")
+    print("=" * 40)
+
+    source = prompt_choice(
+        "Credential source",
+        ["issued credentials", "wallet credentials"],
+    )
+    source_dir = ISSUED_CREDENTIALS_DIR if source == "issued credentials" else WALLET_CREDENTIALS_DIR
+
+    files = credential_files(source_dir)
+    if not files:
+        die(f"No credential JSON files found in {relative_path(source_dir)}.")
+
+    display_names = [relative_path(path) for path in files]
+    selected_display_name = prompt_choice("Credential file", display_names)
+    selected_path = files[display_names.index(selected_display_name)]
+
+    mode = prompt_choice("Tampering mode", ["jwt-payload", "disclosure"])
+    credential = load_json_file(selected_path)
+
+    if mode == "jwt-payload":
+        fields = jwt_payload_fields(credential)
+        if not fields:
+            die("Selected credential does not contain a readable JWT payload.")
+    else:
+        fields = disclosure_fields(credential)
+        if not fields:
+            die("Selected credential does not contain disclosures.")
+
+    field = prompt_choice("Field to tamper with", fields)
+    value = input("New value: ").strip()
+    while not value:
+        print("Enter a value.")
+        value = input("New value: ").strip()
+
+    args = argparse.Namespace(
+        input=selected_path,
+        mode=mode,
+        field=field,
+        value=value,
+        output=None,
+    )
+    attack_tamper_credential(args)
 
 
 def interactive_menu():
@@ -376,10 +597,27 @@ def interactive_menu():
             print("Invalid choice.")
             continue
 
-        if attack.name == "fake-issuer":
-            run_fake_issuer_interactive()
-        else:
+        if attack.run_interactive is None:
             die(f"No interactive runner registered for '{attack.name}'.")
+        attack.run_interactive()
+
+
+ATTACKS = {
+    "fake-issuer": AttackSpec(
+        name="fake-issuer",
+        description="Forge a credential that impersonates a trusted official issuer.",
+        configure_parser=configure_fake_issuer_parser,
+        run=attack_fake_issuer,
+        run_interactive=run_fake_issuer_interactive,
+    ),
+    "tamper-credential": AttackSpec(
+        name="tamper-credential",
+        description="Modify an existing credential without re-signing it.",
+        configure_parser=configure_tamper_credential_parser,
+        run=attack_tamper_credential,
+        run_interactive=run_tamper_credential_interactive,
+    ),
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
