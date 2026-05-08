@@ -17,6 +17,7 @@ ISSUERS_FILE = os.path.join(BASE_DIR, 'data', 'trusted_issuers.json')
 INCOMING_DIR = os.path.join(BASE_DIR, 'data', 'issued_credentials')
 PRESENTATION_DIR = os.path.join(BASE_DIR, 'data', 'presentations')
 DEVICE_KEY_DIR = os.path.join(os.path.dirname(__file__), 'device_keys')
+PIN_FILE = os.path.join(os.path.dirname(__file__), 'wallet_pin.json')
 
 # --- Messages ---
 def _info(msg): print(f"\n[INFO]: {msg}")
@@ -25,6 +26,70 @@ def _ok(msg): print(f"\n[OK] {msg}")
 def _err(msg): print(f"\n[ERR]: {msg}")
 
 # --- Helper functions ---
+def hash_pin(pin: str) -> str:
+    """
+    Hash PIN with SHA-256 for storage
+    """
+    import hashlib
+    return hashlib.sha256(pin.encode()).hexdigest()
+
+def setup_pin():
+    """
+    First time setup -> user sets a wallet PIN
+
+    [TEE OPERATION]
+    In real life the PIN would be verified in the TEE and never leave the secure hardware.
+    In this PoC we store it as a SHA256 hash
+    """
+    print("\n" + "=" * 40)
+    print("Set wallet PIN")
+    print("=" * 40)
+    
+    while True:
+        pin = input("Enter pin (min 4 digits): ").strip()
+        if len(pin) < 4 or not pin.isdigit():
+            _err("PIN must be at least 4 digits")
+            continue
+        confirm = input("Confirm PIN: ").strip()
+        if pin != confirm:
+            _err("PINs don't match. Try again")
+            continue
+        break
+
+    with open(PIN_FILE, "w") as f:
+        json.dump({"pin_hash": hash_pin(pin)}, f)
+
+    _ok("PIN set succesfully")
+
+def unlock_wallet() -> bool:
+    """
+    Unlock wallet with PIN (or in real life biometric)
+
+    [TEE OPERATION]
+
+    After a max amount of tries the wallet would lock and require recovery
+    """
+    MAX_ATTEMPTS = 3
+
+    with open(PIN_FILE) as f:
+        stored = json.load(f)
+
+    print("\n" + "="*40)
+    print("Unlock wallet")
+    print("=" * 40)
+
+    for attempts in range(1, MAX_ATTEMPTS + 1):
+        pin = input(f"Enter PIN (attempt {attempts}/{MAX_ATTEMPTS}): ").strip()
+        if hash_pin(pin) == stored["pin_hash"]:
+            _ok("Wallet unlocked")
+            return True
+        else:
+            _err("Incorrect pin")
+
+    _warn("Too many failed attempts. Wallet locked")
+    _warn("In the real system this would trigger a recovery flow")
+    return False
+
 def decode_disclosure(encoded: str) -> tuple:
     """
     decode a base64 SD-JWT disclosure
@@ -436,4 +501,16 @@ def main_menu():
             _err("Invalid option.")
 
 if __name__ == "__main__":
+    # First time - setup
+    if not os.path.exists(PIN_FILE):
+        print("\nWelcome to the Identity Wallet!")
+        print("This is your first time running the application")
+        setup_pin()
+        # Generate device keys on first run
+        if not os.path.exists(os.path.join(DEVICE_KEY_DIR, 'private_key.pem')):
+            from crypto.keys import generate_keypair, save_keypair
+
+            priv, pub = generate_keypair()
+            save_keypair(priv, pub, DEVICE_KEY_DIR)
+            _info("Device keys generated")
     main_menu()
