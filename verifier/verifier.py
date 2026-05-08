@@ -2,15 +2,13 @@ import sys
 import os
 import json
 import base64
-import hashlib
 import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from crypto.keys import load_public_key, generate_keypair, save_keypair
 from crypto.signing import verify
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import hashes
+from crypto.sd_jwt import verify_sd_jwt
 
 BASE_DIR = os.path.join(os.path.dirname(__file__), '..')
 PRESENTATION_DIR = os.path.join(BASE_DIR, 'data', 'presentations')
@@ -42,11 +40,6 @@ def decode_disclosure(disclosure: str) -> tuple[str, object]:
     _, claim_name, claim_value = parts
     return claim_name, claim_value
 
-def hash_disclosure(disclosure: str) -> str:
-    """SHA-256 hash of a disclosure string, base64url-encoded (no padding)."""
-    digest = hashlib.sha256(disclosure.encode()).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
-
 
 # --- Revocation / trust checks ---
 
@@ -66,26 +59,6 @@ def get_trusted_issuer(issuer_name: str) -> dict | None:
         if entry["name"] == issuer_name:
             return entry
     return None
-
-
-# --- JWT verification ---
-
-def verify_sd_jwt_signature(jwt_str: str, issuer_public_key) -> dict | None:
-    """
-    Verify the issuer's ECDSA signature on the SD-JWT.
-    Returns the decoded payload dict on success, None on failure.
-    """
-    try:
-        parts = jwt_str.split('.')
-        if len(parts) != 3:
-            return None
-        header_b64, payload_b64, sig_b64 = parts
-        signing_input = f"{header_b64}.{payload_b64}".encode()
-        sig_bytes = _b64url_decode(sig_b64)
-        issuer_public_key.verify(sig_bytes, signing_input, ec.ECDSA(hashes.SHA256()))
-        return json.loads(_b64url_decode(payload_b64))
-    except Exception:
-        return None
 
 
 # --- Commands ---
@@ -154,7 +127,7 @@ def cmd_verify(args):
     else:
         device_pub = load_public_key(DEVICE_PUBLIC_KEY_PATH)
         presentation_data = {k: v for k, v in presentation.items()
-                             if k not in ("device_sig", "issuer_sig")}
+                             if k not in ("device_sig", "issuer_jwt")}
         device_sig = presentation.get("device_sig")
         if not device_sig:
             print("FAIL")
@@ -198,10 +171,10 @@ def cmd_verify(args):
 
     # 4. SD-JWT issuer signature
     print("\n[4] Issuer SD-JWT signature ... ", end="", flush=True)
-    issuer_sig = presentation.get("issuer_sig")
+    issuer_sig = presentation.get("issuer_jwt")
     if not issuer_sig:
         print("SKIP")
-        _warn("No SD-JWT (issuer_sig) in presentation — issuer signature not verified.")
+        _warn("No SD-JWT (issuer_jwt) in presentation — issuer signature not verified.")
     elif issuer_entry is None:
         print("SKIP")
         _warn("Cannot verify SD-JWT without a trusted issuer entry.")
@@ -212,27 +185,16 @@ def cmd_verify(args):
             _warn(f"Issuer public key not found at {pub_key_path}.")
         else:
             issuer_pub = load_public_key(pub_key_path)
-            jwt_payload = verify_sd_jwt_signature(issuer_sig, issuer_pub)
-            if jwt_payload is None:
+            if not verify_sd_jwt(issuer_sig, issuer_pub):
                 print("FAIL")
                 _err("Issuer SD-JWT signature is invalid.")
                 passed = False
             else:
                 print("OK")
-                # 4a. Verify disclosed claims are committed in JWT
-                sd_hashes = set(jwt_payload.get("_sd", []))
-                disclosed = presentation.get("disclosed_claims", {})
-                all_bound = True
-                for disc_str in disclosed.values():
-                    if hash_disclosure(disc_str) not in sd_hashes:
-                        _err(f"Disclosure not committed in SD-JWT: {disc_str[:32]}...")
-                        all_bound = False
-                        passed = False
-                if all_bound:
-                    _ok("All disclosed claims are committed in the SD-JWT.")
 
                 # 4b. Expiry
                 import time
+                jwt_payload = json.loads(_b64url_decode(issuer_sig.split('.')[1]))
                 exp = jwt_payload.get("exp")
                 if exp and int(time.time()) > exp:
                     _warn("Credential has expired.")
@@ -247,11 +209,7 @@ def cmd_verify(args):
         _warn("No claims disclosed in this presentation.")
     else:
         for key, disc_str in disclosed.items():
-            try:
-                claim_name, claim_value = decode_disclosure(disc_str)
-                print(f"  {claim_name}: {claim_value}")
-            except Exception:
-                _warn(f"Could not decode disclosure for key '{key}': {disc_str[:32]}...")
+                print(f"  {key}: {disc_str[:32]}")
 
     # 6. Final verdict
     print("\n" + "═" * 54)
