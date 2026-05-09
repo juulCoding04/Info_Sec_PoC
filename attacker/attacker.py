@@ -2,6 +2,7 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import sys
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ ISSUED_CREDENTIALS_DIR = os.path.join(DATA_DIR, "issued_credentials")
 TRUSTED_ISSUERS_FILE = os.path.join(DATA_DIR, "trusted_issuers.json")
 WALLET_PUBLIC_KEY_FILE = os.path.join(BASE_DIR, "wallet", "device_keys", "public_key.pem")
 WALLET_CREDENTIALS_DIR = os.path.join(BASE_DIR, "wallet", "storage", "credentials")
+PRESENTATION_DIR = os.path.join(DATA_DIR, "presentations")
 
 
 CLAIM_TEMPLATES = {
@@ -121,6 +123,11 @@ def write_json_file(path: str, data: dict):
 
     with open(path, "w") as file:
         json.dump(data, file, indent=2)
+
+
+def copy_file_exactly(input_path: str, output_path: str):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    shutil.copyfile(input_path, output_path)
 
 
 def ensure_attacker_keys(force: bool = False):
@@ -241,10 +248,24 @@ def credential_files(directory: str) -> list[str]:
     ]
 
 
+def presentation_files() -> list[str]:
+    return credential_files(PRESENTATION_DIR)
+
+
 def default_tampered_output_path(input_path: str, mode: str) -> str:
     original_name = os.path.basename(input_path)
     mode_slug = mode.replace("-", "_")
     return os.path.join(ISSUED_CREDENTIALS_DIR, f"tampered_{mode_slug}_{original_name}")
+
+
+def default_replay_output_path(input_path: str) -> str:
+    original_name = os.path.basename(input_path)
+    return os.path.join(PRESENTATION_DIR, f"replayed_{original_name}")
+
+
+def default_tampered_presentation_output_path(input_path: str) -> str:
+    original_name = os.path.basename(input_path)
+    return os.path.join(PRESENTATION_DIR, f"tampered_{original_name}")
 
 
 def tamper_jwt_payload(credential: dict, field: str, value):
@@ -450,6 +471,76 @@ def attack_clone_credential(args) -> str:
     return out_path
 
 
+def parse_json_path(path: str) -> tuple[str, int | None]:
+    if "[" not in path and "]" not in path:
+        return path, None
+
+    if not path.endswith("]") or "[" not in path:
+        die("Field paths must be either 'field' or 'field[index]'.")
+
+    field, index_text = path[:-1].split("[", 1)
+    if not field or not index_text.isdigit():
+        die("Field paths must be either 'field' or 'field[index]'.")
+
+    return field, int(index_text)
+
+
+def set_json_path(data: dict, path: str, value):
+    field, index = parse_json_path(path)
+
+    if field not in data:
+        known = ", ".join(data.keys())
+        die(f"Field '{field}' not found. Known fields: {known}")
+
+    old_value = data[field]
+    if index is None:
+        data[field] = value
+        return old_value
+
+    if not isinstance(old_value, list):
+        die(f"Field '{field}' is not a list, so '{path}' cannot be used.")
+    if index < 0 or index >= len(old_value):
+        die(f"Index {index} is out of range for '{field}'.")
+
+    previous = old_value[index]
+    old_value[index] = value
+    return previous
+
+
+def attack_replay_presentation(args) -> str:
+    input_path = resolve_input_path(args.input)
+    output_path = resolve_input_path(args.output) if args.output else default_replay_output_path(input_path)
+
+    if not os.path.exists(input_path):
+        die(f"Input file not found: {input_path}")
+
+    copy_file_exactly(input_path, output_path)
+
+    _ok("Presentation replay file created.")
+    _info("The file was copied byte-for-byte; no presentation data was changed.")
+    _info("Expected verifier result: accepted unless nonce tracking/replay protection is implemented")
+    _info(f"Output file: {output_path}")
+    return output_path
+
+
+def attack_tamper_presentation(args) -> str:
+    input_path = resolve_input_path(args.input)
+    output_path = resolve_input_path(args.output) if args.output else default_tampered_presentation_output_path(input_path)
+    presentation = load_json_file(input_path)
+    value = parse_tampered_value(args.value)
+
+    old_value = set_json_path(presentation, args.field, value)
+    write_json_file(output_path, presentation)
+
+    _ok("Tampered presentation created.")
+    _info(f"Field: {args.field}")
+    _info(f"Old value: {old_value}")
+    _info(f"New value: {value}")
+    _info("Expected verifier result: rejected by device signature verification")
+    _info(f"Output file: {output_path}")
+    return output_path
+
+
 @dataclass(frozen=True)
 class AttackSpec:
     name: str
@@ -542,6 +633,40 @@ def configure_clone_credential_parser(parser: argparse.ArgumentParser):
     )
 
 
+def configure_replay_presentation_parser(parser: argparse.ArgumentParser):
+    parser.add_argument(
+        "--input",
+        required=True,
+        help="Presentation JSON file to replay.",
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional output path. Without this, the replay is written to data/presentations/.",
+    )
+
+
+def configure_tamper_presentation_parser(parser: argparse.ArgumentParser):
+    parser.add_argument(
+        "--input",
+        required=True,
+        help="Presentation JSON file to tamper with.",
+    )
+    parser.add_argument(
+        "--field",
+        required=True,
+        help="Presentation field to change, for example nonce or disclosures[0].",
+    )
+    parser.add_argument(
+        "--value",
+        required=True,
+        help="New value. Parsed as JSON when possible, otherwise kept as a string.",
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional output path. Without this, the tampered file is written to data/presentations/.",
+    )
+
+
 def list_attacks():
     print("\nAvailable attacks")
     print("=" * 40)
@@ -590,6 +715,23 @@ def jwt_payload_fields(credential: dict) -> list[str]:
 
 def disclosure_fields(credential: dict) -> list[str]:
     return sorted(credential.get("disclosures", {}).keys())
+
+
+def presentation_field_choices(presentation: dict) -> list[str]:
+    choices = []
+    for field in ("nonce", "issuer_jwt", "device_sig"):
+        if field in presentation:
+            choices.append(field)
+
+    disclosures = presentation.get("disclosures")
+    if isinstance(disclosures, list):
+        choices.extend(f"disclosures[{index}]" for index in range(len(disclosures)))
+
+    for field in presentation:
+        if field not in {"nonce", "issuer_jwt", "device_sig", "disclosures"}:
+            choices.append(field)
+
+    return choices
 
 
 def run_fake_issuer_interactive():
@@ -693,6 +835,57 @@ def run_clone_credential_interactive():
     attack_clone_credential(args)
 
 
+def run_replay_presentation_interactive():
+    print("\nReplay presentation attack")
+    print("=" * 40)
+
+    files = presentation_files()
+    if not files:
+        die(f"No presentation JSON files found in {relative_path(PRESENTATION_DIR)}.")
+
+    display_names = [relative_path(path) for path in files]
+    selected_display_name = prompt_choice("Presentation file", display_names)
+    selected_path = files[display_names.index(selected_display_name)]
+
+    args = argparse.Namespace(
+        input=selected_path,
+        output=None,
+    )
+    attack_replay_presentation(args)
+
+
+def run_tamper_presentation_interactive():
+    print("\nTamper presentation attack")
+    print("=" * 40)
+
+    files = presentation_files()
+    if not files:
+        die(f"No presentation JSON files found in {relative_path(PRESENTATION_DIR)}.")
+
+    display_names = [relative_path(path) for path in files]
+    selected_display_name = prompt_choice("Presentation file", display_names)
+    selected_path = files[display_names.index(selected_display_name)]
+    presentation = load_json_file(selected_path)
+
+    fields = presentation_field_choices(presentation)
+    if not fields:
+        die("Selected presentation does not contain any fields that can be tampered with.")
+
+    field = prompt_choice("Field to tamper with", fields)
+    value = input("New value: ").strip()
+    while not value:
+        print("Enter a value.")
+        value = input("New value: ").strip()
+
+    args = argparse.Namespace(
+        input=selected_path,
+        field=field,
+        value=value,
+        output=None,
+    )
+    attack_tamper_presentation(args)
+
+
 def interactive_menu():
     while True:
         print("\n" + "=" * 40)
@@ -748,6 +941,20 @@ ATTACKS = {
         configure_parser=configure_clone_credential_parser,
         run=attack_clone_credential,
         run_interactive=run_clone_credential_interactive,
+    ),
+    "replay-presentation": AttackSpec(
+        name="replay-presentation",
+        description="Replay an existing wallet presentation without changing it.",
+        configure_parser=configure_replay_presentation_parser,
+        run=attack_replay_presentation,
+        run_interactive=run_replay_presentation_interactive,
+    ),
+    "tamper-presentation": AttackSpec(
+        name="tamper-presentation",
+        description="Modify a wallet presentation without updating its device signature.",
+        configure_parser=configure_tamper_presentation_parser,
+        run=attack_tamper_presentation,
+        run_interactive=run_tamper_presentation_interactive,
     ),
 }
 

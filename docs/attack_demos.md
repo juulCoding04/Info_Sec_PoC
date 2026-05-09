@@ -42,6 +42,14 @@ where a valid credential from another device is offered to this wallet for
 import. The issuer signature should still be valid, but the wallet should reject
 the credential during holder binding before storing it.
 
+`replay-presentation` copies an existing presentation file byte-for-byte inside
+`data/presentations/`. No JSON fields are changed. This simulates an attacker
+capturing a valid presentation and submitting it again later.
+
+`tamper-presentation` modifies one field inside an existing presentation without
+updating `device_sig`. This simulates an attacker changing the presentation
+while it is travelling from wallet to verifier.
+
 ## Fake Issuer
 
 The fake issuer attack asks for three important choices.
@@ -88,6 +96,25 @@ in the current wallet's import flow. The wallet should reject it before storage
 because the public key in the credential's `cnf` claim does not match
 `wallet/device_keys/public_key.pem`.
 
+## Replaying presentations
+
+The replay presentation attack asks for an existing presentation file from
+`data/presentations/`. The CLI creates a second file with the same contents.
+
+This should be rejected only when the verifier tracks which nonces it issued or
+which nonces have already been used. The current verifier checks that a nonce is
+present, but does not yet remember used nonces.
+
+## Tampering with presentations
+
+The tamper presentation attack asks for a presentation file, a field to change,
+and a new value. Useful fields are `nonce`, `issuer_jwt`, `device_sig`, or a
+specific disclosure such as `disclosures[0]`.
+
+The wallet signs the presentation data before writing the presentation file. If
+an attacker changes any signed field afterward, the verifier should reject the
+presentation during device signature verification.
+
 ## Checking Results
 
 After an attack creates a file in the incoming credential inbox,
@@ -109,6 +136,8 @@ Expected outcomes:
 - JWT payload tampering: rejected by issuer signature verification.
 - Disclosure tampering: rejected if disclosure hash verification is implemented.
 - Cloned credential: rejected by holder binding check.
+- Replayed presentation: accepted until nonce replay protection is implemented.
+- Tampered presentation: rejected by device signature verification.
 
 If disclosure tampering is accepted, that indicates the wallet still needs a
 disclosure hash verification step.
