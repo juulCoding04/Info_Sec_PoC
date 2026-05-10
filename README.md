@@ -85,3 +85,32 @@ python -m issuer.issuer -p <issuer> revoke --jti <Credential ID (jti)>
 the Credential ID (jti) is printed when issueing a credential.
 
 
+## Verifier commands
+
+### Setup
+Run once to generate the verifier's key pair:
+```bash
+python -m verifier.verifier init
+```
+Add `--force` to overwrite existing keys.
+
+### List pending presentations
+```bash
+python -m verifier.verifier list
+```
+Lists all presentation files waiting in `data/presentations/`, showing credential type, issuer and JTI for each.
+
+### Verify a presentation
+```bash
+python -m verifier.verifier verify --presentation <filename>
+```
+The filename can be just the file name (resolved relative to `data/presentations/`) or a full path.
+
+This runs the full verification pipeline:
+1. Device signature — confirms the presentation was created by the wallet and not tampered with
+2. Nonce present — ensures the presentation includes a nonce (replay attack detection)
+3. Trusted issuer — checks the issuer against `data/trusted_issuers.json`
+4. Issuer SD-JWT signature — verifies the cryptographic signature of the issuer
+5. Disclosure integrity — verifies each disclosed claim is committed in the SD-JWT
+6. Revocation check — checks the credential JTI against `data/revocation_list.json`
+

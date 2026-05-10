@@ -18,6 +18,7 @@ REVOCATION_FILE = os.path.join(BASE_DIR, 'data', 'revocation_list.json')
 ISSUERS_FILE = os.path.join(BASE_DIR, 'data', 'trusted_issuers.json')
 DEVICE_PUBLIC_KEY_PATH = os.path.join(BASE_DIR, 'wallet', 'device_keys', 'public_key.pem')
 VERIFIER_KEY_DIR = os.path.join(os.path.dirname(__file__), 'verifier_keys')
+USED_NONCES_FILE = os.path.join(BASE_DIR, 'data', 'used_nonces.json')
 
 
 def _info(msg): print(f"[INFO]  {msg}")
@@ -75,6 +76,22 @@ def get_trusted_issuer(issuer_name: str) -> dict | None:
         if entry["name"] == issuer_name:
             return entry
     return None
+
+
+def _is_nonce_used(nonce: str) -> bool:
+    if not os.path.exists(USED_NONCES_FILE):
+        return False
+    with open(USED_NONCES_FILE) as f:
+        return nonce in json.load(f).get("used_nonces", [])
+
+def _mark_nonce_used(nonce: str):
+    data = {"used_nonces": []}
+    if os.path.exists(USED_NONCES_FILE):
+        with open(USED_NONCES_FILE) as f:
+            data = json.load(f)
+    data["used_nonces"].append(nonce)
+    with open(USED_NONCES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 # --- Commands ---
@@ -166,15 +183,18 @@ def cmd_verify(args):
             _err("Device signature is invalid — presentation may have been tampered with.")
             passed = False
 
-    # 2. Nonce check
-    print("\n[2] Nonce present ... ", end="", flush=True)
+    # 2. Nonce / replay check
+    print("\n[2] Nonce / replay check ... ", end="", flush=True)
     if not nonce:
         print("FAIL")
         _err("No nonce in presentation — replay attacks cannot be detected.")
         passed = False
+    elif _is_nonce_used(nonce):
+        print("FAIL")
+        _err(f"Nonce '{nonce}' was already used — this is a replayed presentation.")
+        passed = False
     else:
         print("OK")
-        _info("(In production the verifier would match this against its own issued nonce.)")
 
     # 3. Trusted issuer
     print("\n[3] Trusted issuer ... ", end="", flush=True)
@@ -269,6 +289,7 @@ def cmd_verify(args):
     # 8. Final verdict
     print("\n" + "═" * 54)
     if passed:
+        _mark_nonce_used(nonce)
         _ok("Presentation ACCEPTED — all checks passed.")
     else:
         _err("Presentation REJECTED — one or more checks failed.")
