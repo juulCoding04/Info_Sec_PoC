@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import base64
+import hashlib
+import time
 import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -16,6 +18,7 @@ REVOCATION_FILE = os.path.join(BASE_DIR, 'data', 'revocation_list.json')
 ISSUERS_FILE = os.path.join(BASE_DIR, 'data', 'trusted_issuers.json')
 DEVICE_PUBLIC_KEY_PATH = os.path.join(BASE_DIR, 'wallet', 'device_keys', 'public_key.pem')
 VERIFIER_KEY_DIR = os.path.join(os.path.dirname(__file__), 'verifier_keys')
+USED_NONCES_FILE = os.path.join(BASE_DIR, 'data', 'used_nonces.json')
 
 
 def _info(msg): print(f"[INFO]  {msg}")
@@ -27,18 +30,32 @@ def die(msg):
     sys.exit(1)
 
 
-# --- SD-JWT helpers ---
+# --- JWT / SD-JWT helpers ---
 
 def _b64url_decode(s: str) -> bytes:
     s += '=' * (-len(s) % 4)
     return base64.urlsafe_b64decode(s)
 
+def _parse_jwt_payload(jwt_str: str) -> dict | None:
+    """Decode the JWT payload without verifying the signature."""
+    try:
+        parts = jwt_str.split('.')
+        if len(parts) != 3:
+            return None
+        return json.loads(_b64url_decode(parts[1]))
+    except Exception:
+        return None
+
 def decode_disclosure(disclosure: str) -> tuple[str, object]:
     """Decode a SD-JWT disclosure string → (claim_name, claim_value)."""
     raw = _b64url_decode(disclosure)
-    parts = json.loads(raw)
-    _, claim_name, claim_value = parts
+    _, claim_name, claim_value = json.loads(raw)
     return claim_name, claim_value
+
+def _hash_disclosure(disclosure: str) -> str:
+    """SHA-256 hash of a disclosure string, base64url-encoded (no padding)."""
+    digest = hashlib.sha256(disclosure.encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
 
 
 # --- Revocation / trust checks ---
@@ -59,6 +76,22 @@ def get_trusted_issuer(issuer_name: str) -> dict | None:
         if entry["name"] == issuer_name:
             return entry
     return None
+
+
+def _is_nonce_used(nonce: str) -> bool:
+    if not os.path.exists(USED_NONCES_FILE):
+        return False
+    with open(USED_NONCES_FILE) as f:
+        return nonce in json.load(f).get("used_nonces", [])
+
+def _mark_nonce_used(nonce: str):
+    data = {"used_nonces": []}
+    if os.path.exists(USED_NONCES_FILE):
+        with open(USED_NONCES_FILE) as f:
+            data = json.load(f)
+    data["used_nonces"].append(nonce)
+    with open(USED_NONCES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 # --- Commands ---
@@ -88,9 +121,10 @@ def cmd_list(_args=None):
         path = os.path.join(PRESENTATION_DIR, f)
         with open(path) as fh:
             p = json.load(fh)
-        ctype = p.get("credential_type", "unknown")
-        issuer = p.get("issuer") or "unknown"
-        jti = p.get("jti") or "—"
+        payload = _parse_jwt_payload(p.get("issuer_jwt", "")) or {}
+        ctype = payload.get("credential_type", "unknown")
+        issuer = payload.get("iss") or "unknown"
+        jti = payload.get("jti") or "—"
         print(f"  [{i}] {f}")
         print(f"       type={ctype}  issuer={issuer}  jti={jti}")
     print("=" * 54)
@@ -107,59 +141,67 @@ def cmd_verify(args):
     with open(path) as f:
         presentation = json.load(f)
 
+    issuer_jwt = presentation.get("issuer_jwt")
+    disclosures = presentation.get("disclosures", [])
+    nonce = presentation.get("nonce")
+    device_sig = presentation.get("device_sig")
+
+    # Parse JWT payload early (unverified) for display and lookups
+    raw_payload = _parse_jwt_payload(issuer_jwt) if issuer_jwt else {}
+    issuer_name = (raw_payload or {}).get("iss")
+    jti = (raw_payload or {}).get("jti")
+    credential_type = (raw_payload or {}).get("credential_type")
+
     print("\n" + "═" * 54)
     print("  Verifying Presentation")
     print("═" * 54)
     print(f"  File:            {os.path.basename(path)}")
-    print(f"  Credential type: {presentation.get('credential_type', '—')}")
-    print(f"  Issuer:          {presentation.get('issuer') or '—'}")
-    print(f"  JTI:             {presentation.get('jti') or '—'}")
-    print(f"  Nonce:           {presentation.get('nonce', '—')}")
+    print(f"  Credential type: {credential_type or '—'}")
+    print(f"  Issuer:          {issuer_name or '—'}")
+    print(f"  JTI:             {jti or '—'}")
+    print(f"  Nonce:           {nonce or '—'}")
     print("═" * 54)
 
     passed = True
 
-    # 1. Device signature
+    # 1. Device signature — signed over {issuer_jwt, disclosures, nonce}
     print("\n[1] Device signature ... ", end="", flush=True)
     if not os.path.exists(DEVICE_PUBLIC_KEY_PATH):
         print("SKIP")
         _warn("Wallet device public key not found — cannot verify device binding.")
     else:
         device_pub = load_public_key(DEVICE_PUBLIC_KEY_PATH)
-        presentation_data = {k: v for k, v in presentation.items()
-                             if k not in ("device_sig", "issuer_jwt")}
-        device_sig = presentation.get("device_sig")
+        signed_data = {k: v for k, v in presentation.items() if k != "device_sig"}
         if not device_sig:
             print("FAIL")
             _warn("No device signature found in presentation.")
             passed = False
-        elif verify(presentation_data, device_sig, device_pub):
+        elif verify(signed_data, device_sig, device_pub):
             print("OK")
         else:
             print("FAIL")
             _err("Device signature is invalid — presentation may have been tampered with.")
             passed = False
 
-    # 2. Revocation check
-    print("\n[2] Revocation check ... ", end="", flush=True)
-    jti = presentation.get("jti")
-    if not jti:
-        print("SKIP")
-        _warn("No JTI in presentation — cannot check revocation list.")
-    elif is_revoked(jti):
-        print("REVOKED")
-        _err(f"Credential '{jti}' is revoked.")
+    # 2. Nonce / replay check
+    print("\n[2] Nonce / replay check ... ", end="", flush=True)
+    if not nonce:
+        print("FAIL")
+        _err("No nonce in presentation — replay attacks cannot be detected.")
+        passed = False
+    elif _is_nonce_used(nonce):
+        print("FAIL")
+        _err(f"Nonce '{nonce}' was already used — this is a replayed presentation.")
         passed = False
     else:
         print("OK")
 
     # 3. Trusted issuer
     print("\n[3] Trusted issuer ... ", end="", flush=True)
-    issuer_name = presentation.get("issuer")
     issuer_entry = None
     if not issuer_name:
         print("SKIP")
-        _warn("No issuer name in presentation — cannot check trust registry.")
+        _warn("No issuer (iss) in JWT payload — cannot check trust registry.")
     else:
         issuer_entry = get_trusted_issuer(issuer_name)
         if issuer_entry is None:
@@ -171,10 +213,10 @@ def cmd_verify(args):
 
     # 4. SD-JWT issuer signature
     print("\n[4] Issuer SD-JWT signature ... ", end="", flush=True)
-    issuer_sig = presentation.get("issuer_jwt")
-    if not issuer_sig:
+    jwt_payload = None
+    if not issuer_jwt:
         print("SKIP")
-        _warn("No SD-JWT (issuer_jwt) in presentation — issuer signature not verified.")
+        _warn("No issuer_jwt in presentation.")
     elif issuer_entry is None:
         print("SKIP")
         _warn("Cannot verify SD-JWT without a trusted issuer entry.")
@@ -185,35 +227,69 @@ def cmd_verify(args):
             _warn(f"Issuer public key not found at {pub_key_path}.")
         else:
             issuer_pub = load_public_key(pub_key_path)
-            if not verify_sd_jwt(issuer_sig, issuer_pub):
+            # verify_sd_jwt returns True/False; decode payload separately
+            if not verify_sd_jwt(issuer_jwt, issuer_pub):
                 print("FAIL")
                 _err("Issuer SD-JWT signature is invalid.")
                 passed = False
             else:
+                jwt_payload = raw_payload  # signature verified — payload is trustworthy
                 print("OK")
 
-                # 4b. Expiry
-                import time
-                jwt_payload = json.loads(_b64url_decode(issuer_sig.split('.')[1]))
                 exp = jwt_payload.get("exp")
                 if exp and int(time.time()) > exp:
                     _warn("Credential has expired.")
                     passed = False
 
-    # 5. Decode and display disclosed claims
+    # 5. Disclosure integrity — every disclosure must be committed in the JWT's _sd
+    print("\n[5] Disclosure integrity ... ", end="", flush=True)
+    if jwt_payload is None:
+        print("SKIP")
+        _warn("Cannot check disclosures without a verified JWT payload.")
+    elif not disclosures:
+        print("SKIP")
+        _warn("No disclosures in presentation.")
+    else:
+        sd_hashes = set(jwt_payload.get("_sd", []))
+        tampered = [disc for disc in disclosures
+                    if _hash_disclosure(disc) not in sd_hashes]
+        if tampered:
+            print("FAIL")
+            _err(f"Disclosures not committed in SD-JWT: {tampered}")
+            passed = False
+        else:
+            print("OK")
+
+    # 6. Revocation check
+    print("\n[6] Revocation check ... ", end="", flush=True)
+    if not jti:
+        print("SKIP")
+        _warn("No JTI in JWT payload — cannot check revocation list.")
+    elif is_revoked(jti):
+        print("REVOKED")
+        _err(f"Credential '{jti}' is revoked.")
+        passed = False
+    else:
+        print("OK")
+
+    # 7. Decode and display disclosed claims
     print("\n" + "═" * 54)
     print("  Disclosed Claims")
     print("═" * 54)
-    disclosed = presentation.get("disclosed_claims", {})
-    if not disclosed:
+    if not disclosures:
         _warn("No claims disclosed in this presentation.")
     else:
-        for key, disc_str in disclosed.items():
-                print(f"  {key}: {disc_str[:32]}")
+        for disc_str in disclosures:
+            try:
+                claim_name, claim_value = decode_disclosure(disc_str)
+                print(f"  {claim_name}: {claim_value}")
+            except Exception:
+                _warn(f"Could not decode disclosure: {disc_str[:40]}...")
 
-    # 6. Final verdict
+    # 8. Final verdict
     print("\n" + "═" * 54)
     if passed:
+        _mark_nonce_used(nonce)
         _ok("Presentation ACCEPTED — all checks passed.")
     else:
         _err("Presentation REJECTED — one or more checks failed.")
