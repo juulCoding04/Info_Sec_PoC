@@ -14,6 +14,7 @@ python -m attacker.attacker
 The menu lists the available attacks. Choose an attack by entering its number.
 The CLI then asks for the values it needs, such as which issuer to impersonate,
 which credential type to forge, or which credential file to tamper with.
+After the "Menu options" section, a more detailed explanation of each attack and a summary of the possible options is given.
 
 ## Menu Options
 
@@ -34,7 +35,7 @@ wallet credentials from `wallet/storage/credentials/` as the source. The
 tampered copy is written to `data/issued_credentials/` by default, so it can be
 tested through the wallet import flow.
 
-`clone-credential` does not literally copy an existing credential file. Because
+`clone-credential` simulates the cloning of a valid credential from another wallet. Because
 the PoC only has one wallet, it creates a fresh valid credential using a trusted
 issuer key, binds it to the attacker's device key, and places it in the incoming
 credential inbox: `data/issued_credentials/`. This represents the situation
@@ -50,7 +51,8 @@ capturing a valid presentation and submitting it again later.
 updating `device_sig`. This simulates an attacker changing the presentation
 while it is travelling from wallet to verifier.
 
-## Fake Issuer
+## Attack options
+### Fake Issuer
 
 The fake issuer attack asks for three important choices.
 
@@ -71,7 +73,7 @@ credential:
   but the JWT is still signed with the attacker's private key. The wallet should
   reject it during issuer signature verification.
 
-## Tampering with credentials
+### Tampering with credentials
 
 The tamper credential attack asks where to take the source credential from and
 what kind of tampering to perform.
@@ -80,10 +82,9 @@ what kind of tampering to perform.
 `iss`, `jti`, or `exp`. This should break the issuer signature.
 
 `disclosure` changes one selective-disclosure value, such as `first_name` or
-`student_id`. This should be detected by checking whether the changed disclosure
-still hashes to one of the signed `_sd` values.
+`student_id`. This is different because the disclosures themselves are not directly stored in the JWT's, only their hashes are.
 
-## Cloning credentials
+### Cloning credentials
 
 The clone credential attack asks for the issuer and credential type to use for
 the sample foreign credential. The CLI creates the credential using the issuer's
@@ -96,16 +97,15 @@ in the current wallet's import flow. The wallet should reject it before storage
 because the public key in the credential's `cnf` claim does not match
 `wallet/device_keys/public_key.pem`.
 
-## Replaying presentations
+### Replaying presentations
 
 The replay presentation attack asks for an existing presentation file from
-`data/presentations/`. The CLI creates a second file with the same contents.
+`data/presentations/` (If no files are here, the user must present some credentials first in from the wallet). The CLI creates a second file with the same contents.
 
-This should be rejected only when the verifier tracks which nonces it issued or
-which nonces have already been used. The current verifier checks that a nonce is
-present, but does not yet remember used nonces.
+This should be rejected when the verifier tracks which nonces it issued or
+which nonces have already been used.
 
-## Tampering with presentations
+### Tampering with presentations
 
 The tamper presentation attack asks for a presentation file, a field to change,
 and a new value. Useful fields are `nonce`, `issuer_jwt`, `device_sig`, or a
@@ -128,16 +128,20 @@ Choose `Receive new credentials` and select the attack file. In this PoC,
 `Receive new credentials` means the wallet is reviewing pending incoming files
 before importing them into `wallet/storage/credentials/`. A successful defense
 means the wallet rejects the credential before storing it.
+The presentation attacks can be checked by running the verifier commands:
+
+```bash
+python -m verifier.verifier init
+python -m verifier.verifier list # List the available presentations
+python -m verifier.verifier verify --presentation <filename> # The filenames are shown in the output of the list command above
+```
 
 Expected outcomes:
 
 - Fake issuer with attacker key: rejected by trusted issuer public-key check.
 - Fake issuer with registered key: rejected by issuer signature verification.
 - JWT payload tampering: rejected by issuer signature verification.
-- Disclosure tampering: rejected if disclosure hash verification is implemented.
+- Disclosure tampering: rejected by disclosure hash verification.
 - Cloned credential: rejected by holder binding check.
-- Replayed presentation: accepted until nonce replay protection is implemented.
+- Replayed presentation: rejected because nonce was already used
 - Tampered presentation: rejected by device signature verification.
-
-If disclosure tampering is accepted, that indicates the wallet still needs a
-disclosure hash verification step.
